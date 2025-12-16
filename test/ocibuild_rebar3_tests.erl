@@ -4,6 +4,8 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-import(ocibuild_test_helpers, [make_temp_dir/1, cleanup_temp_dir/1]).
+
 %%%===================================================================
 %%% File collection tests (using exported function)
 %%%===================================================================
@@ -166,67 +168,6 @@ get_auth_username_password_test() ->
     after
         os:unsetenv("OCIBUILD_USERNAME"),
         os:unsetenv("OCIBUILD_PASSWORD")
-    end.
-
-%%%===================================================================
-%%% Cross-platform helpers
-%%%===================================================================
-
-%% @doc Get the system temp directory in a cross-platform way
-temp_dir() ->
-    case os:type() of
-        {win32, _} ->
-            case os:getenv("TEMP") of
-                false ->
-                    case os:getenv("TMP") of
-                        false ->
-                            "C:\\Temp";
-                        TmpDir ->
-                            TmpDir
-                    end;
-                TempDir ->
-                    TempDir
-            end;
-        _ ->
-            "/tmp"
-    end.
-
-%% @doc Create a unique temporary directory
-make_temp_dir(Prefix) ->
-    Unique = integer_to_list(erlang:unique_integer([positive])),
-    DirName = Prefix ++ "_" ++ Unique,
-    TmpDir = filename:join(temp_dir(), DirName),
-    ok =
-        filelib:ensure_dir(
-            filename:join(TmpDir, "placeholder")
-        ),
-    case file:make_dir(TmpDir) of
-        ok ->
-            TmpDir;
-        {error, eexist} ->
-            TmpDir
-    end.
-
-%% @doc Recursively delete a directory (cross-platform)
-cleanup_temp_dir(Dir) ->
-    case filelib:is_dir(Dir) of
-        true ->
-            {ok, Files} = file:list_dir(Dir),
-            lists:foreach(
-                fun(File) ->
-                    Path = filename:join(Dir, File),
-                    case filelib:is_dir(Path) of
-                        true ->
-                            cleanup_temp_dir(Path);
-                        false ->
-                            file:delete(Path)
-                    end
-                end,
-                Files
-            ),
-            file:del_dir(Dir);
-        false ->
-            ok
     end.
 
 %%%===================================================================

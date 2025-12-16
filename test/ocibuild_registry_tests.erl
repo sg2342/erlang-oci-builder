@@ -8,19 +8,6 @@
 %%% Test fixtures
 %%%===================================================================
 
-%% Sample manifest JSON
-sample_manifest() ->
-    ocibuild_json:encode(#{
-        ~"schemaVersion" => 2,
-        ~"mediaType" => ~"application/vnd.oci.image.manifest.v1+json",
-        ~"config" => #{
-            ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
-            ~"digest" => ~"sha256:abc123",
-            ~"size" => 1234
-        },
-        ~"layers" => []
-    }).
-
 %% Sample config JSON
 sample_config() ->
     ocibuild_json:encode(#{
@@ -28,6 +15,25 @@ sample_config() ->
         ~"os" => ~"linux",
         ~"config" => #{},
         ~"rootfs" => #{~"type" => ~"layers", ~"diff_ids" => []}
+    }).
+
+%% Calculate actual digest for sample config
+sample_config_digest() ->
+    ocibuild_digest:sha256(sample_config()).
+
+%% Sample manifest JSON - uses actual digest of sample config
+sample_manifest() ->
+    ConfigDigest = sample_config_digest(),
+    ConfigSize = byte_size(sample_config()),
+    ocibuild_json:encode(#{
+        ~"schemaVersion" => 2,
+        ~"mediaType" => ~"application/vnd.oci.image.manifest.v1+json",
+        ~"config" => #{
+            ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
+            ~"digest" => ConfigDigest,
+            ~"size" => ConfigSize
+        },
+        ~"layers" => []
     }).
 
 %%%===================================================================
@@ -49,6 +55,7 @@ registry_test_() ->
     {foreach, fun setup/0, fun cleanup/1, [
         {"pull manifest from generic registry", fun pull_manifest_generic_test/0},
         {"pull blob", fun pull_blob_test/0},
+        {"pull blob rejects tampered content", fun pull_blob_digest_mismatch_test/0},
         {"check blob exists returns true", fun check_blob_exists_true_test/0},
         {"check blob exists returns false", fun check_blob_exists_false_test/0},
         {"http error handling", fun http_error_test/0}
@@ -60,10 +67,13 @@ registry_test_() ->
 
 pull_manifest_generic_test() ->
     %% Mock HTTP responses for a generic registry (not docker.io)
+    %% Use actual digest of sample config in the URL pattern
+    ConfigDigest = sample_config_digest(),
+    ConfigUrl = "https://ghcr.io/v2/myorg/myapp/blobs/" ++ binary_to_list(ConfigDigest),
     meck:expect(httpc, request, fun
         (get, {"https://ghcr.io/v2/myorg/myapp/manifests/latest", _Headers}, _HttpOpts, _Opts) ->
             {ok, {{http, 200, "OK"}, [], sample_manifest()}};
-        (get, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:abc123", _Headers}, _HttpOpts, _Opts) ->
+        (get, {Url, _Headers}, _HttpOpts, _Opts) when Url =:= ConfigUrl ->
             {ok, {{http, 200, "OK"}, [], sample_config()}}
     end),
 
@@ -85,21 +95,49 @@ pull_manifest_generic_test() ->
 
 pull_blob_test() ->
     BlobData = <<"binary blob data here">>,
+    %% Use actual digest of blob data
+    BlobDigest = ocibuild_digest:sha256(BlobData),
+    BlobUrl = "https://ghcr.io/v2/myorg/myapp/blobs/" ++ binary_to_list(BlobDigest),
 
     meck:expect(httpc, request, fun(
-        get, {"https://ghcr.io/v2/myorg/myapp/blobs/sha256:blobdigest", _Headers}, _HttpOpts, _Opts
-    ) ->
+        get, {Url, _Headers}, _HttpOpts, _Opts
+    ) when Url =:= BlobUrl ->
         {ok, {{http, 200, "OK"}, [], BlobData}}
     end),
 
     Result = ocibuild_registry:pull_blob(
         ~"ghcr.io",
         ~"myorg/myapp",
-        ~"sha256:blobdigest",
+        BlobDigest,
         #{token => ~"test-token"}
     ),
 
     ?assertEqual({ok, BlobData}, Result).
+
+%% Test that tampered content is rejected (security fix for digest verification)
+pull_blob_digest_mismatch_test() ->
+    OriginalData = <<"original content">>,
+    TamperedData = <<"tampered content">>,
+    %% Request using digest of original data, but server returns tampered data
+    OriginalDigest = ocibuild_digest:sha256(OriginalData),
+    BlobUrl = "https://ghcr.io/v2/myorg/myapp/blobs/" ++ binary_to_list(OriginalDigest),
+
+    meck:expect(httpc, request, fun(
+        get, {Url, _Headers}, _HttpOpts, _Opts
+    ) when Url =:= BlobUrl ->
+        %% MITM or registry compromise returns different content
+        {ok, {{http, 200, "OK"}, [], TamperedData}}
+    end),
+
+    Result = ocibuild_registry:pull_blob(
+        ~"ghcr.io",
+        ~"myorg/myapp",
+        OriginalDigest,
+        #{token => ~"test-token"}
+    ),
+
+    %% Should detect the mismatch and reject
+    ?assertMatch({error, {digest_mismatch, _}}, Result).
 
 %%%===================================================================
 %%% Check blob exists tests

@@ -194,7 +194,8 @@ Image1 = ocibuild:add_layer(Image, [
 add_layer(#{layers := Layers, config := Config} = Image, Files) ->
     Layer = ocibuild_layer:create(Files),
     NewConfig = add_layer_to_config(Config, Layer),
-    Image#{layers := Layers ++ [Layer], config := NewConfig}.
+    %% Prepend for O(1) - layers are stored in reverse order, reversed on export
+    Image#{layers := [Layer | Layers], config := NewConfig}.
 
 -doc """
 Copy files to a destination directory in the image.
@@ -398,8 +399,9 @@ split_name_tag(NameTag) ->
             {Name, Tag};
         [Name | TagParts] ->
             %% Handle case with port: "registry:5000/repo:tag"
-            Tag = lists:last(TagParts),
-            NameParts = [Name | lists:droplast(TagParts)],
+            %% Use reverse pattern for O(n) instead of last+droplast O(2n)
+            [Tag | RevRest] = lists:reverse(TagParts),
+            NameParts = [Name | lists:reverse(RevRest)],
             {iolist_to_binary(lists:join(~":", NameParts)), Tag}
     end.
 
@@ -416,8 +418,9 @@ parse_repo_tag(RepoTag) ->
         [Repo] ->
             {Repo, ~"latest"};
         Parts ->
-            Tag = lists:last(Parts),
-            Repo = iolist_to_binary(lists:join(~":", lists:droplast(Parts))),
+            %% Use reverse pattern for O(n) instead of last+droplast O(2n)
+            [Tag | RevRest] = lists:reverse(Parts),
+            Repo = iolist_to_binary(lists:join(~":", lists:reverse(RevRest))),
             {Repo, Tag}
     end.
 
@@ -438,11 +441,12 @@ init_config(BaseConfig) ->
 add_layer_to_config(Config, #{diff_id := DiffId}) ->
     Rootfs = maps:get(~"rootfs", Config),
     DiffIds = maps:get(~"diff_ids", Rootfs, []),
-    NewRootfs = Rootfs#{~"diff_ids" => DiffIds ++ [DiffId]},
+    %% Prepend for O(1) - stored in reverse order, reversed on export
+    NewRootfs = Rootfs#{~"diff_ids" => [DiffId | DiffIds]},
 
     History = maps:get(~"history", Config, []),
-    NewHistory =
-        History ++ [#{~"created" => iso8601_now(), ~"created_by" => ~"ocibuild"}],
+    %% Prepend for O(1) - stored in reverse order, reversed on export
+    NewHistory = [#{~"created" => iso8601_now(), ~"created_by" => ~"ocibuild"} | History],
 
     Config#{~"rootfs" => NewRootfs, ~"history" => NewHistory}.
 

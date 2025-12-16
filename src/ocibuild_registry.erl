@@ -180,9 +180,28 @@ pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes) 
                 [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
             ),
             Headers = auth_headers(Token),
-            http_get_with_progress(lists:flatten(Url), Headers, ProgressFn, Phase, TotalBytes);
+            case
+                http_get_with_progress(lists:flatten(Url), Headers, ProgressFn, Phase, TotalBytes)
+            of
+                {ok, Data} ->
+                    %% Verify downloaded content matches expected digest
+                    verify_digest(Data, Digest);
+                {error, _} = Err ->
+                    Err
+            end;
         {error, _} = Err ->
             Err
+    end.
+
+%% Verify that downloaded content matches expected digest
+-spec verify_digest(binary(), binary()) -> {ok, binary()} | {error, term()}.
+verify_digest(Data, ExpectedDigest) ->
+    ActualDigest = ocibuild_digest:sha256(Data),
+    case ActualDigest =:= ExpectedDigest of
+        true ->
+            {ok, Data};
+        false ->
+            {error, {digest_mismatch, #{expected => ExpectedDigest, actual => ActualDigest}}}
     end.
 
 -doc "Check if a blob exists in the registry.".
@@ -250,7 +269,7 @@ registry_url(Registry) ->
     case maps:find(Registry, ?REGISTRY_URLS) of
         {ok, Url} ->
             Url;
-        _error ->
+        _ ->
             "https://" ++ binary_to_list(Registry)
     end.
 
@@ -335,7 +354,12 @@ get_target_platform() ->
         case erlang:system_info(system_architecture) of
             Arch0 when is_list(Arch0) ->
                 normalize_arch(list_to_binary(Arch0));
-            _ ->
+            Other ->
+                io:format(
+                    standard_error,
+                    "Warning: Could not detect system architecture (~p), defaulting to amd64~n",
+                    [Other]
+                ),
                 ~"amd64"
         end,
     {Os, Arch}.
@@ -413,6 +437,7 @@ auth_headers(Token) when is_binary(Token) ->
 %% Push all layers
 -spec push_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
 push_layers(#{layers := Layers}, BaseUrl, Repo, Token) ->
+    %% Layers are stored in reverse order, reverse for correct push order
     lists:foldl(
         fun
             (#{digest := Digest, data := Data}, ok) ->
@@ -421,7 +446,7 @@ push_layers(#{layers := Layers}, BaseUrl, Repo, Token) ->
                 Err
         end,
         ok,
-        Layers
+        lists:reverse(Layers)
     ).
 
 %% Push config and return its digest and size
@@ -503,6 +528,7 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
 ) ->
     ok | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
+    %% Layers are stored in reverse order, reverse for correct manifest order
     LayerDescriptors =
         [
             #{
@@ -515,7 +541,7 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
                 digest := Digest,
                 size := Size
             } <-
-                maps:get(layers, Image, [])
+                lists:reverse(maps:get(layers, Image, []))
         ],
 
     {ManifestJson, _} =
@@ -700,12 +726,19 @@ normalize_headers(Headers) ->
 %%%===================================================================
 
 %% Report progress if callback is defined
+%% Wraps callback in try/catch to prevent user callback crashes from breaking operations
 -spec maybe_report_progress(progress_callback() | undefined, progress_info()) -> ok.
 maybe_report_progress(undefined, _Info) ->
     ok;
 maybe_report_progress(ProgressFn, Info) when is_function(ProgressFn, 1) ->
-    ProgressFn(Info),
-    ok.
+    try
+        ProgressFn(Info),
+        ok
+    catch
+        _:_ ->
+            %% Ignore callback errors - operations should not fail due to progress reporting
+            ok
+    end.
 
 %% HTTP GET with streaming progress support
 -spec http_get_with_progress(

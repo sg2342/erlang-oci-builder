@@ -52,6 +52,13 @@ The TAR format consists of 512-byte blocks:
 %% Directory
 -define(DIRTYPE, $5).
 
+%% Common file permission modes
+
+% rwxr-xr-x (executable files, directories)
+-define(MODE_EXEC, 8#755).
+% rw-r--r-- (regular files)
+-define(MODE_FILE, 8#644).
+
 -doc """
 Create a TAR archive in memory.
 
@@ -118,14 +125,36 @@ parent_dirs(Path, Acc) ->
             parent_dirs(Parent, Acc1)
     end.
 
+%% Validate path doesn't contain traversal sequences
+-spec validate_path(binary()) -> ok | {error, path_traversal}.
+validate_path(Path) ->
+    %% Split path and check each component for ".."
+    Components = binary:split(Path, ~"/", [global]),
+    case lists:member(~"..", Components) of
+        true ->
+            {error, path_traversal};
+        false ->
+            ok
+    end.
+
 %% Normalize path: ensure it starts with ./ for tar compatibility
+%% Rejects paths containing ".." traversal sequences (security)
 -spec normalize_path(binary()) -> binary().
-normalize_path(<<"/", Rest/binary>>) ->
+normalize_path(Path) ->
+    case validate_path(Path) of
+        ok ->
+            normalize_path_internal(Path);
+        {error, path_traversal} ->
+            error({path_traversal, Path})
+    end.
+
+-spec normalize_path_internal(binary()) -> binary().
+normalize_path_internal(<<"/", Rest/binary>>) ->
     %% Keep as binary interpolation
     <<"./", Rest/binary>>;
-normalize_path(<<"./", _/binary>> = Path) ->
+normalize_path_internal(<<"./", _/binary>> = Path) ->
     Path;
-normalize_path(Path) ->
+normalize_path_internal(Path) ->
     %% Keep as binary interpolation
     <<"./", Path/binary>>.
 
@@ -141,7 +170,7 @@ build_dir_entry(Path) ->
                 <<Path/binary, "/">>
         end,
     NormPath = normalize_path(DirPath),
-    Header = build_header(NormPath, 0, 8#755, ?DIRTYPE),
+    Header = build_header(NormPath, 0, ?MODE_EXEC, ?DIRTYPE),
     [Header].
 
 %% Build a file entry (header + content + padding)

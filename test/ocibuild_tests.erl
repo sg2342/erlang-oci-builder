@@ -4,6 +4,8 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-import(ocibuild_test_helpers, [make_temp_dir/1, make_temp_file/2, cleanup_temp_dir/1]).
+
 %%%===================================================================
 %%% Digest tests
 %%%===================================================================
@@ -67,6 +69,26 @@ tar_compressed_test() ->
     %% Should start with gzip magic bytes
     <<16#1f, 16#8b, _/binary>> = Compressed,
     ok.
+
+%% Security test: path traversal sequences must be rejected
+tar_path_traversal_test() ->
+    %% Paths with ".." components should raise error
+    TraversalPaths = [
+        ~"../etc/passwd",
+        ~"foo/../../../etc/passwd",
+        ~"/app/../etc/shadow",
+        ~".."
+    ],
+    lists:foreach(
+        fun(Path) ->
+            Files = [{Path, ~"malicious content", 8#644}],
+            ?assertError(
+                {path_traversal, _},
+                ocibuild_tar:create(Files)
+            )
+        end,
+        TraversalPaths
+    ).
 
 %%%===================================================================
 %%% Layer tests
@@ -218,73 +240,6 @@ save_tarball_test() ->
         <<16#1f, 16#8b, _/binary>> = Data
     after
         file:delete(TmpFile)
-    end.
-
-%%%===================================================================
-%%% Cross-platform helpers
-%%%===================================================================
-
-%% @doc Get the system temp directory in a cross-platform way
-temp_dir() ->
-    case os:type() of
-        {win32, _} ->
-            case os:getenv("TEMP") of
-                false ->
-                    case os:getenv("TMP") of
-                        false ->
-                            "C:\\Temp";
-                        TmpDir ->
-                            TmpDir
-                    end;
-                TempDir ->
-                    TempDir
-            end;
-        _ ->
-            "/tmp"
-    end.
-
-%% @doc Create a unique temporary directory
-make_temp_dir(Prefix) ->
-    Unique = integer_to_list(erlang:unique_integer([positive])),
-    DirName = Prefix ++ "_" ++ Unique,
-    TmpDir = filename:join(temp_dir(), DirName),
-    ok =
-        filelib:ensure_dir(
-            filename:join(TmpDir, "placeholder")
-        ),
-    case file:make_dir(TmpDir) of
-        ok ->
-            TmpDir;
-        {error, eexist} ->
-            TmpDir
-    end.
-
-%% @doc Create a unique temporary file path
-make_temp_file(Prefix, Extension) ->
-    Unique = integer_to_list(erlang:unique_integer([positive])),
-    FileName = Prefix ++ "_" ++ Unique ++ Extension,
-    filename:join(temp_dir(), FileName).
-
-%% @doc Recursively delete a directory (cross-platform)
-cleanup_temp_dir(Dir) ->
-    case filelib:is_dir(Dir) of
-        true ->
-            {ok, Files} = file:list_dir(Dir),
-            lists:foreach(
-                fun(File) ->
-                    Path = filename:join(Dir, File),
-                    case filelib:is_dir(Path) of
-                        true ->
-                            cleanup_temp_dir(Path);
-                        false ->
-                            file:delete(Path)
-                    end
-                end,
-                Files
-            ),
-            file:del_dir(Dir);
-        false ->
-            ok
     end.
 
 %%%===================================================================

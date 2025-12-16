@@ -168,6 +168,8 @@ find_relx_release([_ | Rest]) ->
     find_relx_release(Rest).
 
 %% @private Collect all files from release directory
+-spec collect_release_files(file:filename()) ->
+    {ok, [{binary(), binary(), non_neg_integer()}]} | {error, term()}.
 collect_release_files(ReleasePath) ->
     try
         Files = collect_files_recursive(ReleasePath, ReleasePath),
@@ -277,11 +279,30 @@ get_base_image(Args, Config) ->
     end.
 
 %% @private Build the OCI image (defaults to 'foreground' command for Erlang releases)
+-spec build_image(
+    binary(),
+    [{binary(), binary(), non_neg_integer()}],
+    string() | binary(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map()
+) -> {ok, ocibuild:image()} | {error, term()}.
 build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
     build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, ~"foreground").
 
 %% @private Build the OCI image with custom start command
 %% Cmd is the release command: "foreground" for Erlang, "start" for Elixir
+-spec build_image(
+    binary(),
+    [{binary(), binary(), non_neg_integer()}],
+    string() | binary(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map(),
+    binary()
+) -> {ok, ocibuild:image()} | {error, term()}.
 build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd) ->
     try
         %% Start from base image or scratch
@@ -343,8 +364,12 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels,
 
         {ok, Image6}
     catch
-        Reason ->
-            {error, Reason}
+        throw:Reason ->
+            {error, Reason};
+        error:Reason:Stacktrace ->
+            {error, {Reason, Stacktrace}};
+        exit:Reason ->
+            {error, {exit, Reason}}
     end.
 
 %% @private Output the image (save and/or push)
@@ -428,6 +453,7 @@ parse_tag(Tag) ->
     end.
 
 %% @private Get authentication from environment variables
+-spec get_auth() -> map().
 get_auth() ->
     case os:getenv("OCIBUILD_TOKEN") of
         false ->

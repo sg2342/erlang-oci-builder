@@ -23,6 +23,11 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 
 -export([export_directory/2, save_tarball/2, save_tarball/3]).
 
+%% Common file permission modes
+
+% rw-r--r-- (regular files)
+-define(MODE_FILE, 8#644).
+
 -doc """
 Export image as an OCI layout directory.
 
@@ -79,18 +84,23 @@ export_directory(Image, Path) ->
         ok = file:write_file(ManifestPath, ManifestJson),
 
         %% Write layer blobs
+        %% Layers are stored in reverse order, reverse for correct export order
         lists:foreach(
             fun(#{digest := Digest, data := Data}) ->
                 LayerPath = filename:join(BlobsDir, ocibuild_digest:encoded(Digest)),
                 ok = file:write_file(LayerPath, Data)
             end,
-            maps:get(layers, Image, [])
+            lists:reverse(maps:get(layers, Image, []))
         ),
 
         ok
     catch
-        error:Reason ->
-            {error, Reason}
+        throw:Reason ->
+            {error, Reason};
+        error:Reason:Stacktrace ->
+            {error, {Reason, Stacktrace}};
+        exit:Reason ->
+            {error, {exit, Reason}}
     end.
 
 -doc """
@@ -143,14 +153,15 @@ save_tarball(Image, Path, Opts) ->
 
         Files =
             [
-                {~"oci-layout", OciLayout, 8#644},
-                {~"index.json", IndexJson, 8#644},
-                {blob_path(ConfigDigest), ConfigJson, 8#644},
-                {blob_path(ManifestDigest), ManifestJson, 8#644}
+                {~"oci-layout", OciLayout, ?MODE_FILE},
+                {~"index.json", IndexJson, ?MODE_FILE},
+                {blob_path(ConfigDigest), ConfigJson, ?MODE_FILE},
+                {blob_path(ManifestDigest), ManifestJson, ?MODE_FILE}
             ] ++
+                %% Layers are stored in reverse order, reverse for correct export order
                 [
-                    {blob_path(Digest), Data, 8#644}
-                 || #{digest := Digest, data := Data} <- maps:get(layers, Image, [])
+                    {blob_path(Digest), Data, ?MODE_FILE}
+                 || #{digest := Digest, data := Data} <- lists:reverse(maps:get(layers, Image, []))
                 ] ++
                 BaseLayerFiles,
 
@@ -185,14 +196,10 @@ build_base_layers(
                 {ok, CompressedData} ->
                     io:format("  Layer ~B/~B complete~n", [Index, TotalLayers]),
                     %% OCI format keeps layers compressed with digest as path
-                    {Index + 1, Acc ++ [{blob_path(Digest), CompressedData, 8#644}]};
+                    {Index + 1, Acc ++ [{blob_path(Digest), CompressedData, ?MODE_FILE}]};
                 {error, Reason} ->
-                    io:format(
-                        standard_error,
-                        "Warning: Could not fetch base layer ~s: ~p~n",
-                        [Digest, Reason]
-                    ),
-                    {Index + 1, Acc}
+                    %% Fail build instead of silently producing broken images
+                    error({layer_download_failed, Digest, Reason})
             end
         end,
         {1, []},
@@ -252,7 +259,15 @@ format_size(Bytes) ->
 %% Build the config JSON blob
 -spec build_config_blob(ocibuild:image()) -> {binary(), binary()}.
 build_config_blob(#{config := Config}) ->
-    Json = ocibuild_json:encode(Config),
+    %% Reverse diff_ids and history which are stored in reverse order for O(1) append
+    Rootfs = maps:get(~"rootfs", Config),
+    DiffIds = maps:get(~"diff_ids", Rootfs, []),
+    History = maps:get(~"history", Config, []),
+    ExportConfig = Config#{
+        ~"rootfs" => Rootfs#{~"diff_ids" => lists:reverse(DiffIds)},
+        ~"history" => lists:reverse(History)
+    },
+    Json = ocibuild_json:encode(ExportConfig),
     Digest = ocibuild_digest:sha256(Json),
     {Json, Digest}.
 
@@ -260,6 +275,7 @@ build_config_blob(#{config := Config}) ->
 -spec build_layer_descriptors(ocibuild:image()) -> [map()].
 build_layer_descriptors(#{base_manifest := BaseManifest, layers := NewLayers}) ->
     %% Include base image layers + new layers
+    %% NewLayers are stored in reverse order, reverse for correct manifest order
     BaseLayers = maps:get(~"layers", BaseManifest, []),
     NewDescriptors =
         [
@@ -273,11 +289,11 @@ build_layer_descriptors(#{base_manifest := BaseManifest, layers := NewLayers}) -
                 digest := Digest,
                 size := Size
             } <-
-                NewLayers
+                lists:reverse(NewLayers)
         ],
     BaseLayers ++ NewDescriptors;
 build_layer_descriptors(#{layers := NewLayers}) ->
-    %% No base image, just new layers
+    %% No base image, just new layers (reverse for correct order)
     [
         #{
             ~"mediaType" => MediaType,
@@ -289,7 +305,7 @@ build_layer_descriptors(#{layers := NewLayers}) ->
             digest := Digest,
             size := Size
         } <-
-            NewLayers
+            lists:reverse(NewLayers)
     ].
 
 %% Build the index.json structure with tag annotation
