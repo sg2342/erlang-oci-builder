@@ -21,6 +21,9 @@ Configuration in rebar.config:
 ```
 """.
 
+%% Note: The provider behaviour is part of rebar3's internal API and is only
+%% available at runtime when used as a rebar3 plugin. The "behaviour provider
+%% undefined" warning during standalone compilation is expected and harmless.
 -behaviour(provider).
 
 -export([init/1, do/1, format_error/1]).
