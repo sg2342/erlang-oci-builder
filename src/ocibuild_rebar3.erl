@@ -283,10 +283,17 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels)
                     {ok, Img} = ocibuild:scratch(),
                     Img;
                 _ ->
-                    case ocibuild:from(BaseImage) of
+                    %% Create progress callback for download
+                    ProgressFn = make_progress_callback(),
+                    Opts = #{progress => ProgressFn},
+                    Auth = get_auth(),
+                    case ocibuild:from(BaseImage, Auth, Opts) of
                         {ok, Img} ->
+                            %% Clear progress line
+                            io:format("\r\e[K"),
                             Img;
                         {error, FromErr} ->
+                            io:format("\r\e[K"),
                             throw({base_image_failed, FromErr})
                     end
             end,
@@ -432,3 +439,40 @@ to_binary(List) when is_list(List) ->
     list_to_binary(List);
 to_binary(Atom) when is_atom(Atom) ->
     atom_to_binary(Atom, utf8).
+
+%% @private Create a progress callback for terminal display
+make_progress_callback() ->
+    fun(#{phase := Phase, bytes_received := Received, total_bytes := Total}) ->
+        PhaseStr =
+            case Phase of
+                manifest -> "Fetching manifest";
+                config -> "Fetching config  ";
+                layer -> "Downloading layer"
+            end,
+        ProgressStr = format_progress(Received, Total),
+        %% Use carriage return to overwrite the line
+        io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr])
+    end.
+
+%% @private Format progress as a string with bar
+format_progress(Received, unknown) ->
+    io_lib:format("~s", [format_bytes(Received)]);
+format_progress(Received, Total) when is_integer(Total), Total > 0 ->
+    Percent = min(100, (Received * 100) div Total),
+    BarWidth = 30,
+    Filled = (Percent * BarWidth) div 100,
+    Empty = BarWidth - Filled,
+    Bar = lists:duplicate(Filled, $=) ++ lists:duplicate(Empty, $\s),
+    io_lib:format("[~s] ~3B% ~s/~s", [Bar, Percent, format_bytes(Received), format_bytes(Total)]);
+format_progress(Received, _) ->
+    io_lib:format("~s", [format_bytes(Received)]).
+
+%% @private Format bytes as human-readable string
+format_bytes(Bytes) when Bytes < 1024 ->
+    io_lib:format("~B B", [Bytes]);
+format_bytes(Bytes) when Bytes < 1024 * 1024 ->
+    io_lib:format("~.1f KB", [Bytes / 1024]);
+format_bytes(Bytes) when Bytes < 1024 * 1024 * 1024 ->
+    io_lib:format("~.1f MB", [Bytes / (1024 * 1024)]);
+format_bytes(Bytes) ->
+    io_lib:format("~.2f GB", [Bytes / (1024 * 1024 * 1024)]).

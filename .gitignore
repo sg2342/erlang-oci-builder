@@ -33,6 +33,7 @@ cover/
 logs/
 ct_run.*
 TEST-*.xml
+*.coverdata
 
 # Documentation
 doc/

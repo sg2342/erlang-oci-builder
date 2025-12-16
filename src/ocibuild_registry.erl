@@ -10,11 +10,28 @@ See: https://github.com/opencontainers/distribution-spec
 """.
 
 -export([
-    pull_manifest/3, pull_manifest/4,
-    pull_blob/3, pull_blob/4,
+    pull_manifest/3, pull_manifest/4, pull_manifest/5,
+    pull_blob/3, pull_blob/4, pull_blob/5,
     push/5,
     check_blob_exists/4
 ]).
+
+%% Progress callback types
+-type progress_phase() :: manifest | config | layer.
+-type progress_info() :: #{
+    phase := progress_phase(),
+    layer_index => non_neg_integer(),
+    total_layers => non_neg_integer(),
+    bytes_received := non_neg_integer(),
+    total_bytes := non_neg_integer() | unknown
+}.
+-type progress_callback() :: fun((progress_info()) -> ok).
+-type pull_opts() :: #{
+    progress => progress_callback(),
+    auth => map()
+}.
+
+-export_type([progress_callback/0, progress_info/0, pull_opts/0]).
 
 -define(DEFAULT_TIMEOUT, 30000).
 %% Registry URL mappings
@@ -39,7 +56,14 @@ pull_manifest(Registry, Repo, Ref) ->
 -spec pull_manifest(binary(), binary(), binary(), map()) ->
     {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref, Auth) ->
+    pull_manifest(Registry, Repo, Ref, Auth, #{}).
+
+-doc "Pull a manifest and config from a registry with options.".
+-spec pull_manifest(binary(), binary(), binary(), map(), pull_opts()) ->
+    {ok, Manifest :: map(), Config :: map()} | {error, term()}.
+pull_manifest(Registry, Repo, Ref, Auth, Opts) ->
     BaseUrl = registry_url(Registry),
+    ProgressFn = maps:get(progress, Opts, undefined),
 
     %% Get auth token if needed
     case get_auth_token(Registry, Repo, Auth) of
@@ -59,6 +83,13 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
                         {"Accept", "application/vnd.docker.distribution.manifest.v2+json"}
                     ],
 
+            %% Report manifest phase
+            maybe_report_progress(ProgressFn, #{
+                phase => manifest,
+                bytes_received => 0,
+                total_bytes => unknown
+            }),
+
             case http_get(lists:flatten(ManifestUrl), Headers) of
                 {ok, ManifestJson} ->
                     Manifest = ocibuild_json:decode(ManifestJson),
@@ -68,7 +99,7 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
                             %% Select platform-specific manifest and fetch it
                             case select_platform_manifest(Manifest) of
                                 {ok, PlatformDigest} ->
-                                    pull_manifest(Registry, Repo, PlatformDigest, Auth);
+                                    pull_manifest(Registry, Repo, PlatformDigest, Auth, Opts);
                                 {error, _} = Err ->
                                     Err
                             end;
@@ -76,7 +107,26 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
                             %% Single manifest - fetch config blob
                             ConfigDescriptor = maps:get(~"config", Manifest),
                             ConfigDigest = maps:get(~"digest", ConfigDescriptor),
-                            case pull_blob(Registry, Repo, ConfigDigest, Auth) of
+                            ConfigSize = maps:get(~"size", ConfigDescriptor, unknown),
+
+                            %% Report config phase
+                            maybe_report_progress(ProgressFn, #{
+                                phase => config,
+                                bytes_received => 0,
+                                total_bytes => ConfigSize
+                            }),
+
+                            case
+                                pull_blob_internal(
+                                    Registry,
+                                    Repo,
+                                    ConfigDigest,
+                                    Auth,
+                                    ProgressFn,
+                                    config,
+                                    ConfigSize
+                                )
+                            of
                                 {ok, ConfigJson} ->
                                     Config = ocibuild_json:decode(ConfigJson),
                                     {ok, Manifest, Config};
@@ -99,6 +149,28 @@ pull_blob(Registry, Repo, Digest) ->
 -doc "Pull a blob from a registry with authentication.".
 -spec pull_blob(binary(), binary(), binary(), map()) -> {ok, binary()} | {error, term()}.
 pull_blob(Registry, Repo, Digest, Auth) ->
+    pull_blob(Registry, Repo, Digest, Auth, #{}).
+
+-doc "Pull a blob from a registry with options including progress callback.".
+-spec pull_blob(binary(), binary(), binary(), map(), pull_opts()) ->
+    {ok, binary()} | {error, term()}.
+pull_blob(Registry, Repo, Digest, Auth, Opts) ->
+    ProgressFn = maps:get(progress, Opts, undefined),
+    TotalBytes = maps:get(size, Opts, unknown),
+    pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, layer, TotalBytes).
+
+%% Internal blob pull with progress support
+-spec pull_blob_internal(
+    binary(),
+    binary(),
+    binary(),
+    map(),
+    progress_callback() | undefined,
+    progress_phase(),
+    non_neg_integer() | unknown
+) ->
+    {ok, binary()} | {error, term()}.
+pull_blob_internal(Registry, Repo, Digest, Auth, ProgressFn, Phase, TotalBytes) ->
     BaseUrl = registry_url(Registry),
 
     case get_auth_token(Registry, Repo, Auth) of
@@ -108,7 +180,7 @@ pull_blob(Registry, Repo, Digest, Auth) ->
                 [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
             ),
             Headers = auth_headers(Token),
-            http_get(lists:flatten(Url), Headers);
+            http_get_with_progress(lists:flatten(Url), Headers, ProgressFn, Phase, TotalBytes);
         {error, _} = Err ->
             Err
     end.
@@ -609,3 +681,160 @@ http_put(Url, Headers, Body) ->
 -spec normalize_headers([{string(), string()}]) -> [{string(), string()}].
 normalize_headers(Headers) ->
     [{string:lowercase(K), V} || {K, V} <- Headers].
+
+%%%===================================================================
+%%% Progress helpers
+%%%===================================================================
+
+%% Report progress if callback is defined
+-spec maybe_report_progress(progress_callback() | undefined, progress_info()) -> ok.
+maybe_report_progress(undefined, _Info) ->
+    ok;
+maybe_report_progress(ProgressFn, Info) when is_function(ProgressFn, 1) ->
+    ProgressFn(Info),
+    ok.
+
+%% HTTP GET with streaming progress support
+-spec http_get_with_progress(
+    string(),
+    [{string(), string()}],
+    progress_callback() | undefined,
+    progress_phase(),
+    non_neg_integer() | unknown
+) ->
+    {ok, binary()} | {error, term()}.
+http_get_with_progress(Url, Headers, undefined, _Phase, _TotalBytes) ->
+    %% No progress callback - use regular http_get
+    http_get(Url, Headers);
+http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes) ->
+    http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, 5).
+
+-spec http_get_with_progress(
+    string(),
+    [{string(), string()}],
+    progress_callback(),
+    progress_phase(),
+    non_neg_integer() | unknown,
+    non_neg_integer()
+) ->
+    {ok, binary()} | {error, term()}.
+http_get_with_progress(_Url, _Headers, _ProgressFn, _Phase, _TotalBytes, 0) ->
+    {error, too_many_redirects};
+http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLeft) ->
+    ensure_started(),
+    AllHeaders = Headers ++ [{"Connection", "close"}],
+    Request = {Url, AllHeaders},
+    %% Use streaming mode to receive chunks
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}],
+    Opts = [{sync, false}, {stream, self}, {socket_opts, [{keepalive, false}]}],
+
+    case httpc:request(get, Request, HttpOpts, Opts) of
+        {ok, RequestId} ->
+            receive_stream(
+                RequestId, ProgressFn, Phase, TotalBytes, <<>>, Url, Headers, RedirectsLeft
+            );
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Receive streaming response chunks
+-spec receive_stream(
+    reference(),
+    progress_callback(),
+    progress_phase(),
+    non_neg_integer() | unknown,
+    binary(),
+    string(),
+    [{string(), string()}],
+    non_neg_integer()
+) ->
+    {ok, binary()} | {error, term()}.
+receive_stream(RequestId, ProgressFn, Phase, TotalBytes, Acc, Url, Headers, RedirectsLeft) ->
+    receive
+        {http, {RequestId, stream_start, RespHeaders}} ->
+            %% Got headers, try to get content length if not already known
+            ActualTotal =
+                case TotalBytes of
+                    unknown ->
+                        case get_content_length(RespHeaders) of
+                            {ok, Len} -> Len;
+                            error -> unknown
+                        end;
+                    _ ->
+                        TotalBytes
+                end,
+            receive_stream(
+                RequestId, ProgressFn, Phase, ActualTotal, Acc, Url, Headers, RedirectsLeft
+            );
+        {http, {RequestId, stream, BinBodyPart}} ->
+            NewAcc = <<Acc/binary, BinBodyPart/binary>>,
+            BytesReceived = byte_size(NewAcc),
+            maybe_report_progress(ProgressFn, #{
+                phase => Phase,
+                bytes_received => BytesReceived,
+                total_bytes => TotalBytes
+            }),
+            receive_stream(
+                RequestId, ProgressFn, Phase, TotalBytes, NewAcc, Url, Headers, RedirectsLeft
+            );
+        {http, {RequestId, stream_end, _FinalHeaders}} ->
+            %% Final progress report
+            maybe_report_progress(ProgressFn, #{
+                phase => Phase,
+                bytes_received => byte_size(Acc),
+                total_bytes => byte_size(Acc)
+            }),
+            {ok, Acc};
+        {http, {RequestId, {{_, Status, _}, _RespHeaders, Body}}} when
+            Status >= 200, Status < 300
+        ->
+            %% Non-streaming response (small body)
+            maybe_report_progress(ProgressFn, #{
+                phase => Phase,
+                bytes_received => byte_size(Body),
+                total_bytes => byte_size(Body)
+            }),
+            {ok, Body};
+        {http, {RequestId, {{_, Status, _}, RespHeaders, _Body}}} when
+            Status =:= 301; Status =:= 302; Status =:= 303; Status =:= 307; Status =:= 308
+        ->
+            %% Handle redirect
+            case get_redirect_location(RespHeaders) of
+                {ok, RedirectUrl} ->
+                    RedirectHeaders = strip_auth_headers(Headers),
+                    http_get_with_progress(
+                        RedirectUrl,
+                        RedirectHeaders,
+                        ProgressFn,
+                        Phase,
+                        TotalBytes,
+                        RedirectsLeft - 1
+                    );
+                error ->
+                    {error, {redirect_without_location, Status}}
+            end;
+        {http, {RequestId, {{_, Status, Reason}, _, _}}} ->
+            {error, {http_error, Status, Reason}};
+        {http, {RequestId, {error, Reason}}} ->
+            {error, Reason}
+    after 120000 ->
+        httpc:cancel_request(RequestId),
+        {error, timeout}
+    end.
+
+%% Get content length from response headers
+-spec get_content_length([{string(), string()}]) -> {ok, non_neg_integer()} | error.
+get_content_length([]) ->
+    error;
+get_content_length([{Key, Value} | Rest]) ->
+    case string:lowercase(Key) of
+        "content-length" ->
+            try
+                {ok, list_to_integer(Value)}
+            catch
+                _:_ ->
+                    error
+            end;
+        _ ->
+            get_content_length(Rest)
+    end.

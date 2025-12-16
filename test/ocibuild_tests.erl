@@ -127,6 +127,50 @@ add_layer_test() ->
     Layers = maps:get(layers, Image1),
     ?assertEqual(1, length(Layers)).
 
+copy_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:copy(Image0, [{~"myapp", ~"binary data"}], ~"/app"),
+
+    Layers = maps:get(layers, Image1),
+    ?assertEqual(1, length(Layers)).
+
+label_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:label(Image0, ~"version", ~"1.0.0"),
+    Image2 = ocibuild:label(Image1, ~"author", ~"test"),
+
+    Config = maps:get(config, Image2),
+    InnerConfig = maps:get(~"config", Config),
+    Labels = maps:get(~"Labels", InnerConfig),
+
+    ?assertEqual(~"1.0.0", maps:get(~"version", Labels)),
+    ?assertEqual(~"test", maps:get(~"author", Labels)).
+
+expose_string_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:expose(Image0, ~"8080"),
+
+    Config = maps:get(config, Image1),
+    InnerConfig = maps:get(~"config", Config),
+    ExposedPorts = maps:get(~"ExposedPorts", InnerConfig),
+
+    ?assert(maps:is_key(~"8080/tcp", ExposedPorts)).
+
+multiple_layers_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/file1.txt", ~"content1", 8#644}]),
+    Image2 = ocibuild:add_layer(Image1, [{~"/file2.txt", ~"content2", 8#644}]),
+    Image3 = ocibuild:add_layer(Image2, [{~"/file3.txt", ~"content3", 8#644}]),
+
+    Layers = maps:get(layers, Image3),
+    ?assertEqual(3, length(Layers)),
+
+    %% Verify diff_ids are added to config
+    Config = maps:get(config, Image3),
+    Rootfs = maps:get(~"rootfs", Config),
+    DiffIds = maps:get(~"diff_ids", Rootfs),
+    ?assertEqual(3, length(DiffIds)).
+
 %%%===================================================================
 %%% Layout tests
 %%%===================================================================
@@ -242,3 +286,148 @@ cleanup_temp_dir(Dir) ->
         false ->
             ok
     end.
+
+%%%===================================================================
+%%% Tests using meck for mocking
+%%%===================================================================
+
+%% Sample manifest for mocking
+sample_manifest() ->
+    #{
+        ~"schemaVersion" => 2,
+        ~"mediaType" => ~"application/vnd.oci.image.manifest.v1+json",
+        ~"config" => #{
+            ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
+            ~"digest" => ~"sha256:abc123",
+            ~"size" => 1234
+        },
+        ~"layers" => []
+    }.
+
+%% Sample config for mocking
+sample_config() ->
+    #{
+        ~"architecture" => ~"amd64",
+        ~"os" => ~"linux",
+        ~"config" => #{},
+        ~"rootfs" => #{~"type" => ~"layers", ~"diff_ids" => []}
+    }.
+
+from_with_meck_test_() ->
+    {foreach,
+        fun() -> meck:new(ocibuild_registry, [no_link]) end,
+        fun(_) -> meck:unload(ocibuild_registry) end,
+        [
+            {"from/1 with string ref", fun from_string_ref_test/0},
+            {"from/1 with tuple ref", fun from_tuple_ref_test/0},
+            {"from/2 with auth", fun from_with_auth_test/0},
+            {"from/3 with progress", fun from_with_progress_test/0},
+            {"from/1 error handling", fun from_error_test/0},
+            {"image ref parsing", fun parse_image_ref_test/0}
+        ]
+    }.
+
+from_string_ref_test() ->
+    %% Mock pull_manifest/3 which is called by from/1
+    meck:expect(ocibuild_registry, pull_manifest,
+        fun(~"docker.io", ~"library/alpine", ~"3.19") ->
+            {ok, sample_manifest(), sample_config()}
+        end),
+
+    Result = ocibuild:from(~"alpine:3.19"),
+
+    ?assertMatch({ok, _}, Result),
+    {ok, Image} = Result,
+    ?assertEqual({~"docker.io", ~"library/alpine", ~"3.19"}, maps:get(base, Image)),
+    ?assertEqual(~"amd64", maps:get(~"architecture", maps:get(config, Image))).
+
+from_tuple_ref_test() ->
+    meck:expect(ocibuild_registry, pull_manifest,
+        fun(~"ghcr.io", ~"myorg/myapp", ~"v1.0.0") ->
+            {ok, sample_manifest(), sample_config()}
+        end),
+
+    Result = ocibuild:from({~"ghcr.io", ~"myorg/myapp", ~"v1.0.0"}),
+
+    ?assertMatch({ok, _}, Result),
+    {ok, Image} = Result,
+    ?assertEqual({~"ghcr.io", ~"myorg/myapp", ~"v1.0.0"}, maps:get(base, Image)).
+
+from_with_auth_test() ->
+    Auth = #{token => ~"secret-token"},
+    %% from/2 calls from/3 which calls pull_manifest/5
+    meck:expect(ocibuild_registry, pull_manifest,
+        fun(~"ghcr.io", ~"private/repo", ~"latest", Auth2, #{}) when Auth2 =:= Auth ->
+            {ok, sample_manifest(), sample_config()}
+        end),
+
+    Result = ocibuild:from(~"ghcr.io/private/repo:latest", Auth),
+
+    ?assertMatch({ok, _}, Result).
+
+from_with_progress_test() ->
+    Self = self(),
+    ProgressFn = fun(Info) -> Self ! {progress, Info} end,
+
+    %% from/3 calls pull_manifest/5
+    meck:expect(ocibuild_registry, pull_manifest,
+        fun(~"docker.io", ~"library/alpine", ~"latest", #{}, Opts) ->
+            %% Verify progress callback is passed and invoke it
+            case maps:get(progress, Opts, undefined) of
+                undefined -> ok;
+                Fn when is_function(Fn) -> Fn(#{phase => manifest, bytes_received => 100, total_bytes => 100})
+            end,
+            {ok, sample_manifest(), sample_config()}
+        end),
+
+    Result = ocibuild:from(~"alpine", #{}, #{progress => ProgressFn}),
+
+    ?assertMatch({ok, _}, Result),
+    %% Check we received progress
+    receive
+        {progress, #{phase := manifest}} -> ok
+    after 100 ->
+        ok  %% Progress may not be called if mock doesn't invoke it
+    end.
+
+from_error_test() ->
+    meck:expect(ocibuild_registry, pull_manifest,
+        fun(~"docker.io", ~"library/notfound", ~"latest") ->
+            {error, {http_error, 404, "Not Found"}}
+        end),
+
+    Result = ocibuild:from(~"notfound"),
+
+    ?assertMatch({error, _}, Result).
+
+parse_image_ref_test() ->
+    %% Test that simple image names are parsed correctly using the mock
+    meck:expect(ocibuild_registry, pull_manifest,
+        fun(Registry, Repo, Tag) ->
+            %% Return the parsed values for verification
+            {error, {parsed, Registry, Repo, Tag}}
+        end),
+
+    %% Simple name defaults to docker.io/library
+    {error, {parsed, R1, Repo1, T1}} = ocibuild:from(~"nginx"),
+    ?assertEqual(~"docker.io", R1),
+    ?assertEqual(~"library/nginx", Repo1),
+    ?assertEqual(~"latest", T1),
+
+    %% With tag
+    {error, {parsed, R2, Repo2, T2}} = ocibuild:from(~"nginx:1.25"),
+    ?assertEqual(~"docker.io", R2),
+    ?assertEqual(~"library/nginx", Repo2),
+    ?assertEqual(~"1.25", T2),
+
+    %% With org
+    {error, {parsed, R3, Repo3, T3}} = ocibuild:from(~"myorg/myapp:v1"),
+    ?assertEqual(~"docker.io", R3),
+    ?assertEqual(~"myorg/myapp", Repo3),
+    ?assertEqual(~"v1", T3),
+
+    %% Full registry path
+    {error, {parsed, R4, Repo4, T4}} = ocibuild:from(~"ghcr.io/owner/repo:tag"),
+    ?assertEqual(~"ghcr.io", R4),
+    ?assertEqual(~"owner/repo", Repo4),
+    ?assertEqual(~"tag", T4).

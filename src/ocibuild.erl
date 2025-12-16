@@ -25,7 +25,7 @@ ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1">>,
 """.
 
 %% API - Building images
--export([from/1, from/2, scratch/0]).
+-export([from/1, from/2, from/3, scratch/0]).
 %% API - Adding content
 -export([add_layer/2, copy/3]).
 %% API - Configuration
@@ -107,8 +107,34 @@ from(Ref, Auth) when is_binary(Ref) ->
         {error, _} = Err ->
             Err
     end;
-from({Registry, Repo, Tag} = Ref, Auth) ->
-    case ocibuild_registry:pull_manifest(Registry, Repo, Tag, Auth) of
+from({_Registry, _Repo, _Tag} = Ref, Auth) ->
+    from(Ref, Auth, #{}).
+
+-doc """
+Start building an image from a base image with authentication and options.
+
+Options:
+- `progress`: A callback function `fun(ProgressInfo) -> ok` that receives progress updates.
+  ProgressInfo is a map with keys: `phase` (manifest|config|layer), `bytes_received`, `total_bytes`.
+
+Example with progress callback:
+```
+Progress = fun(#{phase := Phase, bytes_received := Recv, total_bytes := Total}) ->
+    io:format("~p: ~p/~p bytes~n", [Phase, Recv, Total])
+end,
+{ok, Image} = ocibuild:from(<<"alpine:3.19">>, #{}, #{progress => Progress}).
+```
+""".
+-spec from(binary() | base_ref(), auth(), map()) -> {ok, image()} | {error, term()}.
+from(Ref, Auth, Opts) when is_binary(Ref) ->
+    case parse_image_ref(Ref) of
+        {ok, ParsedRef} ->
+            from(ParsedRef, Auth, Opts);
+        {error, _} = Err ->
+            Err
+    end;
+from({Registry, Repo, Tag} = Ref, Auth, Opts) ->
+    case ocibuild_registry:pull_manifest(Registry, Repo, Tag, Auth, Opts) of
         {ok, Manifest, Config} ->
             {ok, #{
                 base => Ref,

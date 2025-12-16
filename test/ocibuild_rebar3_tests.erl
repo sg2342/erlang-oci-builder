@@ -5,15 +5,15 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%%===================================================================
-%%% File collection tests
+%%% File collection tests (using exported function)
 %%%===================================================================
 
 collect_release_files_test() ->
     %% Create a mock release directory structure
     TmpDir = create_mock_release(),
     try
-        %% Test file collection
-        {ok, Files} = collect_release_files(TmpDir),
+        %% Test file collection using the actual exported function
+        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
 
         %% Should have collected the files we created
         ?assert(length(Files) >= 3),
@@ -37,14 +37,14 @@ collect_release_files_test() ->
 collect_empty_dir_test() ->
     TmpDir = make_temp_dir("ocibuild_empty"),
     try
-        {ok, Files} = collect_release_files(TmpDir),
+        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
         ?assertEqual([], Files)
     after
         cleanup_temp_dir(TmpDir)
     end.
 
 %%%===================================================================
-%%% Build image tests
+%%% Build image tests (using exported function)
 %%%===================================================================
 
 build_scratch_image_test() ->
@@ -54,7 +54,9 @@ build_scratch_image_test() ->
             {~"/app/lib/myapp.beam", ~"beam_data", 8#644}
         ],
 
-    {ok, Image} = build_test_image(~"scratch", Files, "myapp"),
+    {ok, Image} = ocibuild_rebar3:build_image(
+        ~"scratch", Files, "myapp", ~"/app", #{}, [], #{}
+    ),
 
     %% Verify image structure
     ?assert(is_map(Image)),
@@ -73,8 +75,9 @@ build_with_env_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
     EnvMap = #{~"LANG" => ~"C.UTF-8", ~"PORT" => ~"8080"},
 
-    {ok, Image} =
-        build_test_image_with_opts(~"scratch", Files, "myapp", ~"/app", EnvMap, [], #{}),
+    {ok, Image} = ocibuild_rebar3:build_image(
+        ~"scratch", Files, "myapp", ~"/app", EnvMap, [], #{}
+    ),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -87,16 +90,9 @@ build_with_env_test() ->
 build_with_exposed_ports_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
 
-    {ok, Image} =
-        build_test_image_with_opts(
-            ~"scratch",
-            Files,
-            "myapp",
-            ~"/app",
-            #{},
-            [8080, 443],
-            #{}
-        ),
+    {ok, Image} = ocibuild_rebar3:build_image(
+        ~"scratch", Files, "myapp", ~"/app", #{}, [8080, 443], #{}
+    ),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -109,8 +105,9 @@ build_with_labels_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
     Labels = #{~"org.opencontainers.image.version" => ~"1.0.0"},
 
-    {ok, Image} =
-        build_test_image_with_opts(~"scratch", Files, "myapp", ~"/app", #{}, [], Labels),
+    {ok, Image} = ocibuild_rebar3:build_image(
+        ~"scratch", Files, "myapp", ~"/app", #{}, [], Labels
+    ),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -119,7 +116,7 @@ build_with_labels_test() ->
     ?assertEqual(~"1.0.0", maps:get(~"org.opencontainers.image.version", ImageLabels)).
 
 %%%===================================================================
-%%% Tag parsing tests
+%%% Tag parsing tests (internal logic test)
 %%%===================================================================
 
 parse_tag_simple_test() ->
@@ -131,8 +128,15 @@ parse_tag_no_version_test() ->
 parse_tag_with_path_test() ->
     ?assertEqual({~"myorg/myapp", ~"v1"}, parse_tag(~"myorg/myapp:v1")).
 
+%% Helper to test tag parsing logic (mirrors internal function)
+parse_tag(Tag) ->
+    case binary:split(Tag, ~":") of
+        [Repo, ImageTag] -> {Repo, ImageTag};
+        [Repo] -> {Repo, ~"latest"}
+    end.
+
 %%%===================================================================
-%%% Auth tests
+%%% Auth tests (using exported function)
 %%%===================================================================
 
 get_auth_empty_test() ->
@@ -141,12 +145,12 @@ get_auth_empty_test() ->
     os:unsetenv("OCIBUILD_USERNAME"),
     os:unsetenv("OCIBUILD_PASSWORD"),
 
-    ?assertEqual(#{}, get_auth()).
+    ?assertEqual(#{}, ocibuild_rebar3:get_auth()).
 
 get_auth_token_test() ->
     os:putenv("OCIBUILD_TOKEN", "mytoken123"),
     try
-        Auth = get_auth(),
+        Auth = ocibuild_rebar3:get_auth(),
         ?assertEqual(#{token => ~"mytoken123"}, Auth)
     after
         os:unsetenv("OCIBUILD_TOKEN")
@@ -157,154 +161,11 @@ get_auth_username_password_test() ->
     os:putenv("OCIBUILD_USERNAME", "myuser"),
     os:putenv("OCIBUILD_PASSWORD", "mypass"),
     try
-        Auth = get_auth(),
+        Auth = ocibuild_rebar3:get_auth(),
         ?assertEqual(#{username => ~"myuser", password => ~"mypass"}, Auth)
     after
         os:unsetenv("OCIBUILD_USERNAME"),
         os:unsetenv("OCIBUILD_PASSWORD")
-    end.
-
-%%%===================================================================
-%%% Helper functions - Extract from provider for testing
-%%%===================================================================
-
-%% These functions mirror the internal functions from ocibuild_rebar3
-%% for testing purposes
-
-collect_release_files(ReleasePath) ->
-    try
-        Files = collect_files_recursive(ReleasePath, ReleasePath),
-        {ok, Files}
-    catch
-        {file_error, Path, Reason} ->
-            {error, {file_read_error, Path, Reason}}
-    end.
-
-collect_files_recursive(BasePath, CurrentPath) ->
-    case file:list_dir(CurrentPath) of
-        {ok, Entries} ->
-            lists:flatmap(
-                fun(Entry) ->
-                    FullPath = filename:join(CurrentPath, Entry),
-                    case filelib:is_dir(FullPath) of
-                        true ->
-                            collect_files_recursive(BasePath, FullPath);
-                        false ->
-                            [collect_single_file(BasePath, FullPath)]
-                    end
-                end,
-                Entries
-            );
-        {error, Reason} ->
-            throw({file_error, CurrentPath, Reason})
-    end.
-
-collect_single_file(BasePath, FilePath) ->
-    %% Get relative path from base (cross-platform)
-    RelPath = make_relative_path(BasePath, FilePath),
-    %% Convert to container path with forward slashes
-    ContainerPath = to_container_path(RelPath),
-    {ok, Content} = file:read_file(FilePath),
-    Mode = get_file_mode(FilePath),
-    {ContainerPath, Content, Mode}.
-
-%% @doc Make a path relative to a base path (cross-platform)
-make_relative_path(BasePath, FullPath) ->
-    %% Normalize both paths to use consistent separators
-    BaseNorm = filename:split(BasePath),
-    FullNorm = filename:split(FullPath),
-    %% Remove the base prefix from the full path
-    strip_prefix(BaseNorm, FullNorm).
-
-strip_prefix([H | T1], [H | T2]) ->
-    strip_prefix(T1, T2);
-strip_prefix([], Remaining) ->
-    filename:join(Remaining);
-strip_prefix(_, FullPath) ->
-    filename:join(FullPath).
-
-%% @doc Convert a local path to a container path (always forward slashes)
-to_container_path(RelPath) ->
-    %% Split and rejoin with forward slashes for container
-    Parts = filename:split(RelPath),
-    UnixPath = string:join(Parts, "/"),
-    list_to_binary("/app/" ++ UnixPath).
-
-get_file_mode(FilePath) ->
-    case file:read_file_info(FilePath) of
-        {ok, FileInfo} ->
-            element(8, FileInfo) band 8#777;
-        {error, _} ->
-            8#644
-    end.
-
-build_test_image(BaseImage, Files, ReleaseName) ->
-    build_test_image_with_opts(BaseImage, Files, ReleaseName, <<"/app">>, #{}, [], #{}).
-
-build_test_image_with_opts(
-    BaseImage,
-    Files,
-    ReleaseName,
-    Workdir,
-    EnvMap,
-    ExposePorts,
-    Labels
-) ->
-    Image0 =
-        case BaseImage of
-            ~"scratch" ->
-                {ok, Img} = ocibuild:scratch(),
-                Img
-        end,
-
-    Image1 = ocibuild:add_layer(Image0, Files),
-    Image2 = ocibuild:workdir(Image1, Workdir),
-
-    ReleaseNameBin = list_to_binary(ReleaseName),
-    Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, ~"foreground"],
-    Image3 = ocibuild:entrypoint(Image2, Entrypoint),
-
-    Image4 =
-        case map_size(EnvMap) of
-            0 ->
-                Image3;
-            _ ->
-                ocibuild:env(Image3, EnvMap)
-        end,
-
-    Image5 =
-        lists:foldl(fun(Port, AccImg) -> ocibuild:expose(AccImg, Port) end, Image4, ExposePorts),
-
-    Image6 =
-        maps:fold(
-            fun(Key, Value, AccImg) -> ocibuild:label(AccImg, Key, Value) end,
-            Image5,
-            Labels
-        ),
-
-    {ok, Image6}.
-
-parse_tag(Tag) ->
-    case binary:split(Tag, ~":") of
-        [Repo, ImageTag] ->
-            {Repo, ImageTag};
-        [Repo] ->
-            {Repo, ~"latest"}
-    end.
-
-get_auth() ->
-    case os:getenv("OCIBUILD_TOKEN") of
-        false ->
-            case {os:getenv("OCIBUILD_USERNAME"), os:getenv("OCIBUILD_PASSWORD")} of
-                {false, _} ->
-                    #{};
-                {_, false} ->
-                    #{};
-                {User, Pass} ->
-                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
-            end;
-        Token ->
-            #{token => list_to_binary(Token)}
     end.
 
 %%%===================================================================
