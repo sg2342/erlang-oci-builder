@@ -185,6 +185,8 @@ image = :ocibuild.env(image, %{"MIX_ENV" => "prod"})
 ]}.
 ```
 
+Note: Erlang releases use `foreground` as the default start command.
+
 ### Authentication
 
 Set environment variables for registry authentication:
@@ -207,6 +209,7 @@ export OCIBUILD_PASSWORD="pass"
 | `--tag` | `-t` | Image tag, e.g., `myapp:1.0.0`. Defaults to `release:version` |
 | `--registry` | `-r` | Registry for push, e.g., `ghcr.io` |
 | `--output` | `-o` | Output tarball path (default: `<tag>.tar.gz`) |
+| `--cmd` | `-c` | Release start command (default: `start`). Options: `start`, `start_iex`, `daemon`, `daemon_iex` |
 | `--push` | | Push to registry after build |
 | `--base` | | Override base image |
 | `--release` | | Release name (if multiple configured) |
@@ -224,6 +227,7 @@ def project do
       tag: "myapp:1.0.0",                  # Optional, defaults to app:version
       registry: "ghcr.io/myorg",           # Default registry for --push
       workdir: "/app",                     # Working directory in container
+      cmd: "start",                        # Release command (default: start)
       env: %{"LANG" => "C.UTF-8"},         # Environment variables
       expose: [8080, 443],                 # Ports to expose
       labels: %{                           # Image labels
@@ -234,6 +238,12 @@ def project do
   ]
 end
 ```
+
+Available `cmd` values for Elixir releases:
+- `start` — Start the system (default)
+- `start_iex` — Start with IEx attached
+- `daemon` — Start as a daemon (background)
+- `daemon_iex` — Daemon with IEx attached
 
 ## Programmatic API Reference
 

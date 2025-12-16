@@ -28,7 +28,7 @@ Configuration in rebar.config:
 
 -export([init/1, do/1, format_error/1]).
 %% Exported for use by Mix task (Elixir integration)
--export([collect_release_files/1, build_image/7, get_auth/0]).
+-export([collect_release_files/1, build_image/7, build_image/8, get_auth/0]).
 
 -define(PROVIDER, ocibuild).
 -define(DEPS, [release]).
@@ -276,8 +276,13 @@ get_base_image(Args, Config) ->
             list_to_binary(Base)
     end.
 
-%% @private Build the OCI image
+%% @private Build the OCI image (defaults to 'foreground' command for Erlang releases)
 build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
+    build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, ~"foreground").
+
+%% @private Build the OCI image with custom start command
+%% Cmd is the release command: "foreground" for Erlang, "start" for Elixir
+build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd) ->
     try
         %% Start from base image or scratch
         Image0 =
@@ -309,7 +314,8 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels)
 
         %% Set entrypoint
         ReleaseNameBin = list_to_binary(ReleaseName),
-        Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, ~"foreground"],
+        CmdBin = to_binary(Cmd),
+        Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, CmdBin],
         Image3 = ocibuild:entrypoint(Image2, Entrypoint),
 
         %% Set environment variables

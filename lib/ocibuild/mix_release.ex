@@ -65,6 +65,8 @@ defmodule Ocibuild.MixRelease do
     expose_ports = Keyword.get(ocibuild_config, :expose, [])
     labels = Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map()
     should_push = Keyword.get(ocibuild_config, :push, false)
+    # Elixir releases use "start" command (Erlang uses "foreground")
+    cmd = Keyword.get(ocibuild_config, :cmd, "start")
 
     # Get or generate tag
     tag = get_tag(ocibuild_config, release.name, release.version)
@@ -78,7 +80,7 @@ defmodule Ocibuild.MixRelease do
       {:ok, files} ->
         Mix.shell().info("  Collected #{length(files)} files")
 
-        # Build image
+        # Build image with Elixir-appropriate start command
         case :ocibuild_rebar3.build_image(
                to_binary(base_image),
                files,
@@ -86,7 +88,8 @@ defmodule Ocibuild.MixRelease do
                to_binary(workdir),
                env_map,
                expose_ports,
-               labels
+               labels,
+               to_binary(cmd)
              ) do
           {:ok, image} ->
             output_image(image, tag, ocibuild_config, should_push)

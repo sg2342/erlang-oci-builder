@@ -17,6 +17,7 @@ defmodule Mix.Tasks.Ocibuild do
     * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Defaults to release_name:version
     * `-r, --registry` - Registry for push (e.g., ghcr.io)
     * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
+    * `-c, --cmd` - Release start command (default: "start"). Use "daemon" for background
     * `--push` - Push to registry after build
     * `--base` - Override base image
     * `--release` - Release name (if multiple configured)
@@ -34,7 +35,8 @@ defmodule Mix.Tasks.Ocibuild do
             workdir: "/app",
             env: %{"LANG" => "C.UTF-8"},
             expose: [8080],
-            labels: %{}
+            labels: %{},
+            cmd: "start"  # Release command: "start" (Elixir default), "daemon", etc.
           ]
         ]
       end
@@ -57,14 +59,15 @@ defmodule Mix.Tasks.Ocibuild do
   def run(args) do
     {opts, _remaining, _invalid} =
       OptionParser.parse(args,
-        aliases: [t: :tag, r: :registry, o: :output],
+        aliases: [t: :tag, r: :registry, o: :output, c: :cmd],
         switches: [
           tag: :string,
           registry: :string,
           output: :string,
           push: :boolean,
           base: :string,
-          release: :string
+          release: :string,
+          cmd: :string
         ]
       )
 
@@ -118,6 +121,8 @@ defmodule Mix.Tasks.Ocibuild do
     env_map = Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map()
     expose_ports = Keyword.get(ocibuild_config, :expose, [])
     labels = Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map()
+    # Elixir releases use "start" command (Erlang uses "foreground")
+    cmd = opts[:cmd] || Keyword.get(ocibuild_config, :cmd, "start")
 
     # Get or generate tag
     tag = get_tag(opts, ocibuild_config, release_name, config[:version])
@@ -130,7 +135,7 @@ defmodule Mix.Tasks.Ocibuild do
       {:ok, files} ->
         Mix.shell().info("  Collected #{length(files)} files from release")
 
-        # Build image
+        # Build image with Elixir-appropriate start command
         case :ocibuild_rebar3.build_image(
                to_binary(base_image),
                files,
@@ -138,7 +143,8 @@ defmodule Mix.Tasks.Ocibuild do
                to_binary(workdir),
                env_map,
                expose_ports,
-               labels
+               labels,
+               to_binary(cmd)
              ) do
           {:ok, image} ->
             output_image(image, tag, opts, ocibuild_config)
