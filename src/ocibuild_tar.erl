@@ -1,18 +1,16 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% In-memory TAR archive builder.
-%%%
-%%% This module builds POSIX ustar format TAR archives entirely in memory,
-%%% without writing to disk. This is essential for building OCI layers
-%%% efficiently.
-%%%
-%%% The TAR format consists of 512-byte blocks:
-%%% - Each file has a 512-byte header followed by content padded to 512 bytes
-%%% - Archive ends with two 512-byte blocks of zeros
-%%%
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_tar).
+-moduledoc """
+In-memory TAR archive builder.
+
+This module builds POSIX ustar format TAR archives entirely in memory,
+without writing to disk. This is essential for building OCI layers
+efficiently.
+
+The TAR format consists of 512-byte blocks:
+- Each file has a 512-byte header followed by content padded to 512 bytes
+- Archive ends with two 512-byte blocks of zeros
+""".
 
 -export([create/1, create_compressed/1]).
 
@@ -51,17 +49,19 @@
 -define(FILETYPE, $0).     %% Regular file
 -define(DIRTYPE, $5).      %% Directory
 
-%% @doc Create a TAR archive in memory.
-%%
-%% Files are specified as `{Path, Content, Mode}' tuples.
-%% Directories are created automatically for paths containing `/'.
-%%
-%% ```
-%% TarData = ocibuild_tar:create([
-%%     {<<"/app/myapp">>, AppBinary, 8#755},
-%%     {<<"/app/config.json">>, ConfigJson, 8#644}
-%% ]).
-%% '''
+-doc """
+Create a TAR archive in memory.
+
+Files are specified as `{Path, Content, Mode}` tuples.
+Directories are created automatically for paths containing `/`.
+
+```
+TarData = ocibuild_tar:create([
+    {<<"/app/myapp">>, AppBinary, 8#755},
+    {<<"/app/config.json">>, ConfigJson, 8#644}
+]).
+```
+""".
 -spec create([{Path :: binary(), Content :: binary(), Mode :: integer()}]) -> binary().
 create(Files) ->
     %% Collect all directories that need to be created
@@ -76,7 +76,7 @@ create(Files) ->
 
     iolist_to_binary([DirEntries, FileEntries, EndMarker]).
 
-%% @doc Create a gzip-compressed TAR archive in memory.
+-doc "Create a gzip-compressed TAR archive in memory.".
 -spec create_compressed([{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
                            binary().
 create_compressed(Files) ->
@@ -104,9 +104,9 @@ collect_directories(Files) ->
 -spec parent_dirs(binary(), sets:set(binary())) -> sets:set(binary()).
 parent_dirs(Path, Acc) ->
     case filename:dirname(Path) of
-        <<"."/utf8>> ->
+        ~"." ->
             Acc;
-        <<"/"/utf8>> ->
+        ~"/" ->
             Acc;
         Parent ->
             Acc1 = sets:add_element(Parent, Acc),
@@ -116,11 +116,11 @@ parent_dirs(Path, Acc) ->
 %% Normalize path: ensure it starts with ./ for tar compatibility
 -spec normalize_path(binary()) -> binary().
 normalize_path(<<"/", Rest/binary>>) ->
-    <<"./", Rest/binary>>;
+    <<"./", Rest/binary>>; %% Keep as binary interpolation
 normalize_path(<<"./", _/binary>> = Path) ->
     Path;
 normalize_path(Path) ->
-    <<"./", Path/binary>>.
+    <<"./", Path/binary>>. %% Keep as binary interpolation
 
 %% Build a directory entry
 -spec build_dir_entry(binary()) -> iolist().
@@ -167,8 +167,8 @@ build_header(Name, Size, Mode, TypeFlag) ->
            "ustar",                                      % magic
            0,                                            % null after magic
            "00",                                         % version
-           (pad_right(<<"root"/utf8>>, ?UNAME_SIZE))/binary,     % uname
-           (pad_right(<<"root"/utf8>>, ?GNAME_SIZE))/binary,     % gname
+           (pad_right(~"root", ?UNAME_SIZE))/binary,     % uname
+           (pad_right(~"root", ?GNAME_SIZE))/binary,     % gname
            (octal(0, ?DEVMAJOR_SIZE))/binary,            % devmajor
            (octal(0, ?DEVMINOR_SIZE))/binary,            % devminor
            (pad_right(Prefix, ?PREFIX_SIZE))/binary>>,      % prefix
@@ -203,7 +203,7 @@ split_name(Name) ->
 -spec find_split_point(binary()) -> {ok, binary(), binary()} | error.
 find_split_point(Name) ->
     %% Find last / that gives us a valid split
-    case binary:matches(Name, <<"/"/utf8>>) of
+    case binary:matches(Name, ~"/") of
         [] ->
             error;
         Matches ->

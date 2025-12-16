@@ -1,9 +1,6 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% Tests for the rebar3 provider
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_rebar3_tests).
+-moduledoc "Tests for the rebar3 provider".
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -22,13 +19,13 @@ collect_release_files_test() ->
         ?assert(length(Files) >= 3),
 
         %% Check that bin/myapp has executable permissions
-        BinFile = lists:keyfind(<<"/app/bin/myapp">>, 1, Files),
+        BinFile = lists:keyfind(~"/app/bin/myapp", 1, Files),
         ?assertNotEqual(false, BinFile),
         {_, _, BinMode} = BinFile,
         ?assertEqual(8#755, BinMode band 8#777),
 
         %% Check that lib file has regular permissions
-        LibFile = lists:keyfind(<<"/app/lib/myapp-1.0.0/ebin/myapp.beam">>, 1, Files),
+        LibFile = lists:keyfind(~"/app/lib/myapp-1.0.0/ebin/myapp.beam", 1, Files),
         ?assertNotEqual(false, LibFile),
         {_, _, LibMode} = LibFile,
         ?assertEqual(8#644, LibMode band 8#777)
@@ -52,10 +49,10 @@ collect_empty_dir_test() ->
 
 build_scratch_image_test() ->
     Files =
-        [{<<"/app/bin/myapp">>, <<"#!/bin/sh\necho hello">>, 8#755},
-         {<<"/app/lib/myapp.beam">>, <<"beam_data">>, 8#644}],
+        [{~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755},
+         {~"/app/lib/myapp.beam", ~"beam_data", 8#644}],
 
-    {ok, Image} = build_test_image(<<"scratch">>, Files, "myapp"),
+    {ok, Image} = build_test_image(~"scratch", Files, "myapp"),
 
     %% Verify image structure
     ?assert(is_map(Image)),
@@ -63,70 +60,70 @@ build_scratch_image_test() ->
 
     %% Verify config
     Config = maps:get(config, Image),
-    InnerConfig = maps:get(<<"config">>, Config),
-    ?assertEqual([<<"/app/bin/myapp">>, <<"foreground">>],
-                 maps:get(<<"Entrypoint">>, InnerConfig)),
-    ?assertEqual(<<"/app">>, maps:get(<<"WorkingDir">>, InnerConfig)).
+    InnerConfig = maps:get(~"config", Config),
+    ?assertEqual([~"/app/bin/myapp", ~"foreground"],
+                 maps:get(~"Entrypoint", InnerConfig)),
+    ?assertEqual(~"/app", maps:get(~"WorkingDir", InnerConfig)).
 
 build_with_env_test() ->
-    Files = [{<<"/app/test">>, <<"data">>, 8#644}],
-    EnvMap = #{<<"LANG">> => <<"C.UTF-8">>, <<"PORT">> => <<"8080">>},
+    Files = [{~"/app/test", ~"data", 8#644}],
+    EnvMap = #{~"LANG" => ~"C.UTF-8", ~"PORT" => ~"8080"},
 
     {ok, Image} =
-        build_test_image_with_opts(<<"scratch">>, Files, "myapp", <<"/app">>, EnvMap, [], #{}),
+        build_test_image_with_opts(~"scratch", Files, "myapp", ~"/app", EnvMap, [], #{}),
 
     Config = maps:get(config, Image),
-    InnerConfig = maps:get(<<"config">>, Config),
-    EnvList = maps:get(<<"Env">>, InnerConfig),
+    InnerConfig = maps:get(~"config", Config),
+    EnvList = maps:get(~"Env", InnerConfig),
 
     %% Should contain both env vars
-    ?assert(lists:any(fun(E) -> binary:match(E, <<"LANG=">>) =/= nomatch end, EnvList)),
-    ?assert(lists:any(fun(E) -> binary:match(E, <<"PORT=">>) =/= nomatch end, EnvList)).
+    ?assert(lists:any(fun(E) -> binary:match(E, ~"LANG=") =/= nomatch end, EnvList)),
+    ?assert(lists:any(fun(E) -> binary:match(E, ~"PORT=") =/= nomatch end, EnvList)).
 
 build_with_exposed_ports_test() ->
-    Files = [{<<"/app/test">>, <<"data">>, 8#644}],
+    Files = [{~"/app/test", ~"data", 8#644}],
 
     {ok, Image} =
-        build_test_image_with_opts(<<"scratch">>,
+        build_test_image_with_opts(~"scratch",
                                    Files,
                                    "myapp",
-                                   <<"/app">>,
+                                   ~"/app",
                                    #{},
                                    [8080, 443],
                                    #{}),
 
     Config = maps:get(config, Image),
-    InnerConfig = maps:get(<<"config">>, Config),
-    ExposedPorts = maps:get(<<"ExposedPorts">>, InnerConfig),
+    InnerConfig = maps:get(~"config", Config),
+    ExposedPorts = maps:get(~"ExposedPorts", InnerConfig),
 
-    ?assert(maps:is_key(<<"8080/tcp">>, ExposedPorts)),
-    ?assert(maps:is_key(<<"443/tcp">>, ExposedPorts)).
+    ?assert(maps:is_key(~"8080/tcp", ExposedPorts)),
+    ?assert(maps:is_key(~"443/tcp", ExposedPorts)).
 
 build_with_labels_test() ->
-    Files = [{<<"/app/test">>, <<"data">>, 8#644}],
-    Labels = #{<<"org.opencontainers.image.version">> => <<"1.0.0">>},
+    Files = [{~"/app/test", ~"data", 8#644}],
+    Labels = #{~"org.opencontainers.image.version" => ~"1.0.0"},
 
     {ok, Image} =
-        build_test_image_with_opts(<<"scratch">>, Files, "myapp", <<"/app">>, #{}, [], Labels),
+        build_test_image_with_opts(~"scratch", Files, "myapp", ~"/app", #{}, [], Labels),
 
     Config = maps:get(config, Image),
-    InnerConfig = maps:get(<<"config">>, Config),
-    ImageLabels = maps:get(<<"Labels">>, InnerConfig),
+    InnerConfig = maps:get(~"config", Config),
+    ImageLabels = maps:get(~"Labels", InnerConfig),
 
-    ?assertEqual(<<"1.0.0">>, maps:get(<<"org.opencontainers.image.version">>, ImageLabels)).
+    ?assertEqual(~"1.0.0", maps:get(~"org.opencontainers.image.version", ImageLabels)).
 
 %%%===================================================================
 %%% Tag parsing tests
 %%%===================================================================
 
 parse_tag_simple_test() ->
-    ?assertEqual({<<"myapp">>, <<"1.0.0">>}, parse_tag(<<"myapp:1.0.0">>)).
+    ?assertEqual({~"myapp", ~"1.0.0"}, parse_tag(~"myapp:1.0.0")).
 
 parse_tag_no_version_test() ->
-    ?assertEqual({<<"myapp">>, <<"latest">>}, parse_tag(<<"myapp">>)).
+    ?assertEqual({~"myapp", ~"latest"}, parse_tag(~"myapp")).
 
 parse_tag_with_path_test() ->
-    ?assertEqual({<<"myorg/myapp">>, <<"v1">>}, parse_tag(<<"myorg/myapp:v1">>)).
+    ?assertEqual({~"myorg/myapp", ~"v1"}, parse_tag(~"myorg/myapp:v1")).
 
 %%%===================================================================
 %%% Auth tests
@@ -144,7 +141,7 @@ get_auth_token_test() ->
     os:putenv("OCIBUILD_TOKEN", "mytoken123"),
     try
         Auth = get_auth(),
-        ?assertEqual(#{token => <<"mytoken123">>}, Auth)
+        ?assertEqual(#{token => ~"mytoken123"}, Auth)
     after
         os:unsetenv("OCIBUILD_TOKEN")
     end.
@@ -155,7 +152,7 @@ get_auth_username_password_test() ->
     os:putenv("OCIBUILD_PASSWORD", "mypass"),
     try
         Auth = get_auth(),
-        ?assertEqual(#{username => <<"myuser">>, password => <<"mypass">>}, Auth)
+        ?assertEqual(#{username => ~"myuser", password => ~"mypass"}, Auth)
     after
         os:unsetenv("OCIBUILD_USERNAME"),
         os:unsetenv("OCIBUILD_PASSWORD")
@@ -245,7 +242,7 @@ build_test_image_with_opts(BaseImage,
                            Labels) ->
     Image0 =
         case BaseImage of
-            <<"scratch">> ->
+            ~"scratch" ->
                 {ok, Img} = ocibuild:scratch(),
                 Img
         end,
@@ -254,7 +251,7 @@ build_test_image_with_opts(BaseImage,
     Image2 = ocibuild:workdir(Image1, Workdir),
 
     ReleaseNameBin = list_to_binary(ReleaseName),
-    Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, <<"foreground">>],
+    Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, ~"foreground"],
     Image3 = ocibuild:entrypoint(Image2, Entrypoint),
 
     Image4 =
@@ -276,11 +273,11 @@ build_test_image_with_opts(BaseImage,
     {ok, Image6}.
 
 parse_tag(Tag) ->
-    case binary:split(Tag, <<":">>) of
+    case binary:split(Tag, ~":") of
         [Repo, ImageTag] ->
             {Repo, ImageTag};
         [Repo] ->
-            {Repo, <<"latest">>}
+            {Repo, ~"latest"}
     end.
 
 get_auth() ->

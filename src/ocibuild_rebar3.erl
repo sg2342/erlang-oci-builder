@@ -1,21 +1,25 @@
 %%%-------------------------------------------------------------------
-%%% @doc Rebar3 provider for building OCI container images from releases.
-%%%
-%%% Usage:
-%%%   rebar3 ocibuild -t myapp:1.0.0
-%%%   rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
-%%%
-%%% Configuration in rebar.config:
-%%%   {ocibuild, [
-%%%       {base_image, "debian:slim"},
-%%%       {registry, "docker.io"},
-%%%       {workdir, "/app"},
-%%%       {env, #{<<"LANG">> => <<"C.UTF-8">>}},
-%%%       {expose, [8080]}
-%%%   ]}.
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_rebar3).
+-moduledoc """
+Rebar3 provider for building OCI container images from releases.
+
+Usage:
+```
+rebar3 ocibuild -t myapp:1.0.0
+rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+```
+
+Configuration in rebar.config:
+```
+{ocibuild, [
+    {base_image, "debian:slim"},
+    {registry, "docker.io"},
+    {workdir, "/app"},
+    {env, #{<<"LANG">> => <<"C.UTF-8">>}},
+    {expose, [8080]}
+]}.
+```
+""".
 
 -behaviour(provider).
 
@@ -25,14 +29,14 @@
 
 -define(PROVIDER, ocibuild).
 -define(DEPS, [release]).
--define(DEFAULT_BASE_IMAGE, <<"debian:stable-slim">>).
--define(DEFAULT_WORKDIR, <<"/app">>).
+-define(DEFAULT_BASE_IMAGE, ~"debian:stable-slim").
+-define(DEFAULT_WORKDIR, ~"/app").
 
 %%%===================================================================
 %%% Provider callbacks
 %%%===================================================================
 
-%% @doc Initialize the provider and register CLI options.
+-doc "Initialize the provider and register CLI options.".
 -spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
 init(State) ->
     Provider =
@@ -57,7 +61,7 @@ init(State) ->
                           {profiles, [default, prod]}]),
     {ok, rebar_state:add_provider(State, Provider)}.
 
-%% @doc Execute the provider - build OCI image from release.
+-doc "Execute the provider - build OCI image from release.".
 -spec do(rebar_state:t()) -> {ok, rebar_state:t()} | {error, term()}.
 do(State) ->
     {Args, _} = rebar_state:command_parsed_args(State),
@@ -71,7 +75,7 @@ do(State) ->
             do_build(State, Args, Config, list_to_binary(Tag))
     end.
 
-%% @doc Format error messages for display.
+-doc "Format error messages for display.".
 -spec format_error(term()) -> iolist().
 format_error(missing_tag) ->
     "Missing required --tag (-t) option. Usage: rebar3 ocibuild -t myapp:1.0.0";
@@ -274,7 +278,7 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels)
         %% Start from base image or scratch
         Image0 =
             case BaseImage of
-                <<"scratch">> ->
+                ~"scratch" ->
                     {ok, Img} = ocibuild:scratch(),
                     Img;
                 _ ->
@@ -294,7 +298,7 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels)
 
         %% Set entrypoint
         ReleaseNameBin = list_to_binary(ReleaseName),
-        Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, <<"foreground">>],
+        Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, ~"foreground"],
         Image3 = ocibuild:entrypoint(Image2, Entrypoint),
 
         %% Set environment variables
@@ -369,7 +373,7 @@ push_image(State, Args, Config, Tag, Image) ->
     Registry =
         case proplists:get_value(registry, Args) of
             undefined ->
-                proplists:get_value(registry, Config, <<"docker.io">>);
+                proplists:get_value(registry, Config, ~"docker.io");
             Reg ->
                 list_to_binary(Reg)
         end,
@@ -392,11 +396,11 @@ push_image(State, Args, Config, Tag, Image) ->
 
 %% @private Parse tag into repo and tag parts
 parse_tag(Tag) ->
-    case binary:split(Tag, <<":">>) of
+    case binary:split(Tag, ~":") of
         [Repo, ImageTag] ->
             {Repo, ImageTag};
         [Repo] ->
-            {Repo, <<"latest">>}
+            {Repo, ~"latest"}
     end.
 
 %% @private Get authentication from environment variables

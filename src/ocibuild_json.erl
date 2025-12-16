@@ -1,21 +1,20 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% JSON encoding/decoding wrapper.
-%%%
-%%% This module wraps OTP 27's `json' module with convenience functions
-%%% for OCI-specific JSON handling.
-%%%
-%%% For OTP versions prior to 27, a simple built-in encoder is used.
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_json).
+-moduledoc """
+JSON encoding/decoding wrapper.
+
+This module wraps OTP 27's `json` module with convenience functions
+for OCI-specific JSON handling.
+
+For OTP versions prior to 27, a simple built-in encoder is used.
+""".
 
 -export([encode/1, encode_pretty/1, decode/1]).
 
 %% Check if the native json module is available (OTP 27+)
 -define(HAS_JSON_MODULE, erlang:function_exported(json, encode, 1)).
 
-%% @doc Encode an Erlang term to JSON binary.
+-doc "Encode an Erlang term to JSON binary.".
 -spec encode(term()) -> binary().
 encode(Term) ->
     case ?HAS_JSON_MODULE of
@@ -25,16 +24,12 @@ encode(Term) ->
             iolist_to_binary(encode_term(Term))
     end.
 
-%% @doc Encode an Erlang term to pretty-printed JSON binary.
-%%
-%% Useful for debugging and human-readable output.
+-doc "Encode an Erlang term to pretty-printed JSON binary. Useful for debugging and human-readable output.".
 -spec encode_pretty(term()) -> binary().
 encode_pretty(Term) ->
     encode(Term).
 
-%% @doc Decode a JSON binary to an Erlang term.
-%%
-%% Objects are decoded as maps, arrays as lists.
+-doc "Decode a JSON binary to an Erlang term. Objects are decoded as maps, arrays as lists.".
 -spec decode(binary()) -> term().
 decode(Json) when is_binary(Json) ->
     case ?HAS_JSON_MODULE of
@@ -50,11 +45,11 @@ decode(Json) when is_binary(Json) ->
 
 -spec encode_term(term()) -> iolist().
 encode_term(null) ->
-    <<"null">>;
+    ~"null";
 encode_term(true) ->
-    <<"true">>;
+    ~"true";
 encode_term(false) ->
-    <<"false">>;
+    ~"false";
 encode_term(N) when is_integer(N) ->
     integer_to_binary(N);
 encode_term(N) when is_float(N) ->
@@ -92,14 +87,14 @@ escape_string(<<C, Rest/binary>>) ->
 
 -spec encode_array(list()) -> iolist().
 encode_array([]) ->
-    <<"[]">>;
+    ~"[]";
 encode_array(L) ->
     Elements = lists:join($,, [encode_term(E) || E <- L]),
     [$[, Elements, $]].
 
 -spec encode_object(map()) -> iolist().
 encode_object(M) when map_size(M) =:= 0 ->
-    <<"{}">>;
+    ~"{}";
 encode_object(M) ->
     Pairs = lists:join($,, [encode_pair(K, V) || {K, V} <- maps:to_list(M)]),
     [${, Pairs, $}].
@@ -190,7 +185,7 @@ decode_object_pairs(B, Acc) ->
 decode_number(B) ->
     {NumStr, Rest} = take_number_chars(B, []),
     NumBin = iolist_to_binary(lists:reverse(NumStr)),
-    Num = case binary:match(NumBin, [<<".">>, <<"e">>, <<"E">>]) of
+    Num = case binary:match(NumBin, [~".", ~"e", ~"E"]) of
               nomatch ->
                   binary_to_integer(NumBin);
               _ ->

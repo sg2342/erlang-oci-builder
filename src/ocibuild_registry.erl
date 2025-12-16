@@ -1,14 +1,13 @@
 %%%-------------------------------------------------------------------
-%%% @doc
-%%% OCI Distribution registry client.
-%%%
-%%% Implements the OCI Distribution Specification for pulling and pushing
-%%% container images to registries like Docker Hub, GHCR, etc.
-%%%
-%%% See: https://github.com/opencontainers/distribution-spec
-%%% @end
-%%%-------------------------------------------------------------------
 -module(ocibuild_registry).
+-moduledoc """
+OCI Distribution registry client.
+
+Implements the OCI Distribution Specification for pulling and pushing
+container images to registries like Docker Hub, GHCR, etc.
+
+See: https://github.com/opencontainers/distribution-spec
+""".
 
 -export([pull_manifest/3, pull_manifest/4, pull_blob/3, pull_blob/4, push/5,
          check_blob_exists/4]).
@@ -16,22 +15,22 @@
 -define(DEFAULT_TIMEOUT, 30000).
 %% Registry URL mappings
 -define(REGISTRY_URLS,
-        #{<<"docker.io">> => "https://registry-1.docker.io",
-          <<"ghcr.io">> => "https://ghcr.io",
-          <<"gcr.io">> => "https://gcr.io",
-          <<"quay.io">> => "https://quay.io"}).
+        #{~"docker.io" => "https://registry-1.docker.io",
+          ~"ghcr.io" => "https://ghcr.io",
+          ~"gcr.io" => "https://gcr.io",
+          ~"quay.io" => "https://quay.io"}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-%% @doc Pull a manifest and config from a registry.
+-doc "Pull a manifest and config from a registry.".
 -spec pull_manifest(binary(), binary(), binary()) ->
                        {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref) ->
     pull_manifest(Registry, Repo, Ref, #{}).
 
-%% @doc Pull a manifest and config from a registry with authentication.
+-doc "Pull a manifest and config from a registry with authentication.".
 -spec pull_manifest(binary(), binary(), binary(), map()) ->
                        {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref, Auth) ->
@@ -53,8 +52,8 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
                 {ok, ManifestJson} ->
                     Manifest = ocibuild_json:decode(ManifestJson),
                     %% Fetch config blob
-                    ConfigDescriptor = maps:get(<<"config"/utf8>>, Manifest),
-                    ConfigDigest = maps:get(<<"digest"/utf8>>, ConfigDescriptor),
+                    ConfigDescriptor = maps:get(~"config", Manifest),
+                    ConfigDigest = maps:get(~"digest", ConfigDescriptor),
                     case pull_blob(Registry, Repo, ConfigDigest, Auth) of
                         {ok, ConfigJson} ->
                             Config = ocibuild_json:decode(ConfigJson),
@@ -69,12 +68,12 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
             Err
     end.
 
-%% @doc Pull a blob from a registry.
+-doc "Pull a blob from a registry.".
 -spec pull_blob(binary(), binary(), binary()) -> {ok, binary()} | {error, term()}.
 pull_blob(Registry, Repo, Digest) ->
     pull_blob(Registry, Repo, Digest, #{}).
 
-%% @doc Pull a blob from a registry with authentication.
+-doc "Pull a blob from a registry with authentication.".
 -spec pull_blob(binary(), binary(), binary(), map()) -> {ok, binary()} | {error, term()}.
 pull_blob(Registry, Repo, Digest, Auth) ->
     BaseUrl = registry_url(Registry),
@@ -89,7 +88,7 @@ pull_blob(Registry, Repo, Digest, Auth) ->
             Err
     end.
 
-%% @doc Check if a blob exists in the registry.
+-doc "Check if a blob exists in the registry.".
 -spec check_blob_exists(binary(), binary(), binary(), map()) -> boolean().
 check_blob_exists(Registry, Repo, Digest, Auth) ->
     BaseUrl = registry_url(Registry),
@@ -109,7 +108,7 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
             false
     end.
 
-%% @doc Push an image to a registry.
+-doc "Push an image to a registry.".
 -spec push(ocibuild:image(), binary(), binary(), binary(), map()) -> ok | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth) ->
     BaseUrl = registry_url(Registry),
@@ -157,14 +156,14 @@ registry_url(Registry) ->
 %% Get authentication token
 -spec get_auth_token(binary(), binary(), map()) ->
                         {ok, binary() | none} | {error, term()}.
-get_auth_token(<<"docker.io"/utf8>>, Repo, Auth) ->
+get_auth_token(~"docker.io", Repo, Auth) ->
     %% Docker Hub uses token authentication
     docker_hub_auth(Repo, Auth);
 get_auth_token(_Registry, _Repo, #{token := Token}) ->
     {ok, Token};
 get_auth_token(_Registry, _Repo, #{username := User, password := Pass}) ->
     %% Basic auth - encode as base64
-    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>), %% Keep interpolation
     {ok, {basic, Encoded}};
 get_auth_token(_Registry, _Repo, #{}) ->
     {ok, none}.
@@ -189,7 +188,7 @@ docker_hub_auth(Repo, Auth) ->
     case http_get(Url, Headers) of
         {ok, Body} ->
             Response = ocibuild_json:decode(Body),
-            case maps:find(<<"token"/utf8>>, Response) of
+            case maps:find(~"token", Response) of
                 {ok, Token} ->
                     {ok, Token};
                 error ->
@@ -293,19 +292,19 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
                        ok | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
     LayerDescriptors =
-        [#{<<"mediaType"/utf8>> => MediaType,
-           <<"digest"/utf8>> => Digest,
-           <<"size"/utf8>> => Size}
+        [#{~"mediaType" => MediaType,
+           ~"digest" => Digest,
+           ~"size" => Size}
          || #{media_type := MediaType,
               digest := Digest,
               size := Size}
                 <- maps:get(layers, Image, [])],
 
     {ManifestJson, _} =
-        ocibuild_manifest:build(#{<<"mediaType"/utf8>> =>
-                                      <<"application/vnd.oci.image.config.v1+json"/utf8>>,
-                                  <<"digest"/utf8>> => ConfigDigest,
-                                  <<"size"/utf8>> => ConfigSize},
+        ocibuild_manifest:build(#{~"mediaType" =>
+                                      ~"application/vnd.oci.image.config.v1+json",
+                                  ~"digest" => ConfigDigest,
+                                  ~"size" => ConfigSize},
                                 LayerDescriptors),
 
     Url = io_lib:format("~s/v2/~s/manifests/~s",
