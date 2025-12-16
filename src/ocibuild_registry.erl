@@ -60,8 +60,8 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
                 {ok, ManifestJson} ->
                     Manifest = ocibuild_json:decode(ManifestJson),
                     %% Fetch config blob
-                    ConfigDescriptor = maps:get(<<"config">>, Manifest),
-                    ConfigDigest = maps:get(<<"digest">>, ConfigDescriptor),
+                    ConfigDescriptor = maps:get(~"config", Manifest),
+                    ConfigDigest = maps:get(~"digest", ConfigDescriptor),
                     case pull_blob(Registry, Repo, ConfigDigest, Auth) of
                         {ok, ConfigJson} ->
                             Config = ocibuild_json:decode(ConfigJson),
@@ -149,12 +149,12 @@ push(Image, Registry, Repo, Tag, Auth) ->
 registry_url(Registry) ->
     case maps:find(Registry, ?REGISTRY_URLS) of
         {ok, Url} -> Url;
-        error -> "https://" ++ binary_to_list(Registry)
+        _error -> "https://" ++ binary_to_list(Registry)
     end.
 
 %% Get authentication token
 -spec get_auth_token(binary(), binary(), map()) -> {ok, binary() | none} | {error, term()}.
-get_auth_token(<<"docker.io">>, Repo, Auth) ->
+get_auth_token(~"docker.io", Repo, Auth) ->
     %% Docker Hub uses token authentication
     docker_hub_auth(Repo, Auth);
 get_auth_token(_Registry, _Repo, #{token := Token}) ->
@@ -185,7 +185,7 @@ docker_hub_auth(Repo, Auth) ->
     case http_get(Url, Headers) of
         {ok, Body} ->
             Response = ocibuild_json:decode(Body),
-            case maps:find(<<"token">>, Response) of
+            case maps:find(~"token", Response) of
                 {ok, Token} -> {ok, Token};
                 error -> {error, no_token_in_response}
             end;
@@ -279,9 +279,9 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
 push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
     LayerDescriptors = [
         #{
-            <<"mediaType">> => MediaType,
-            <<"digest">> => Digest,
-            <<"size">> => Size
+            ~"mediaType" => MediaType,
+            ~"digest" => Digest,
+            ~"size" => Size
         }
         || #{media_type := MediaType, digest := Digest, size := Size} 
            <- maps:get(layers, Image, [])
@@ -289,9 +289,9 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
     
     {ManifestJson, _} = ocibuild_manifest:build(
         #{
-            <<"mediaType">> => <<"application/vnd.oci.image.config.v1+json">>,
-            <<"digest">> => ConfigDigest,
-            <<"size">> => ConfigSize
+            ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
+            ~"digest" => ConfigDigest,
+            ~"size" => ConfigSize
         },
         LayerDescriptors
     ),

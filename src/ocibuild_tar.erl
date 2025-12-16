@@ -53,7 +53,7 @@
 -define(PREFIX_SIZE, 155).
 
 %% Type flags
--define(REGTYPE, $0).      %% Regular file
+-define(FILETYPE, $0).     %% Regular file
 -define(DIRTYPE, $5).      %% Directory
 
 %% @doc Create a TAR archive in memory.
@@ -109,8 +109,8 @@ collect_directories(Files) ->
 -spec parent_dirs(binary(), sets:set(binary())) -> sets:set(binary()).
 parent_dirs(Path, Acc) ->
     case filename:dirname(Path) of
-        <<".">> -> Acc;
-        <<"/">> -> Acc;
+        ~"." -> Acc;
+        ~"/" -> Acc;
         Parent ->
             Acc1 = sets:add_element(Parent, Acc),
             parent_dirs(Parent, Acc1)
@@ -142,7 +142,7 @@ build_dir_entry(Path) ->
 build_file_entry(Path, Content, Mode) ->
     NormPath = normalize_path(Path),
     Size = byte_size(Content),
-    Header = build_header(NormPath, Size, Mode, ?REGTYPE),
+    Header = build_header(NormPath, Size, Mode, ?FILETYPE),
     Padding = padding(Size),
     [Header, Content, Padding].
 
@@ -156,23 +156,23 @@ build_header(Name, Size, Mode, TypeFlag) ->
     
     %% Build header with placeholder checksum (spaces)
     H0 = <<
-        (pad_right(ShortName, ?NAME_SIZE))/binary,   % name
+        (pad_right(ShortName, ?NAME_SIZE))/binary,    % name
         (octal(Mode, ?MODE_SIZE))/binary,             % mode
         (octal(0, ?UID_SIZE))/binary,                 % uid
         (octal(0, ?GID_SIZE))/binary,                 % gid
         (octal(Size, ?SIZE_SIZE))/binary,             % size
         (octal(MTime, ?MTIME_SIZE))/binary,           % mtime
-        "        ",                                    % checksum placeholder (8 spaces)
-        TypeFlag,                                      % typeflag
-        (pad_right(<<>>, ?LINKNAME_SIZE))/binary,    % linkname
-        "ustar",                                       % magic
-        0,                                             % null after magic
-        "00",                                          % version
-        (pad_right(<<"root">>, ?UNAME_SIZE))/binary, % uname
-        (pad_right(<<"root">>, ?GNAME_SIZE))/binary, % gname
-        (octal(0, ?DEVMAJOR_SIZE))/binary,           % devmajor
-        (octal(0, ?DEVMINOR_SIZE))/binary,           % devminor
-        (pad_right(Prefix, ?PREFIX_SIZE))/binary     % prefix
+        "        ",                                   % checksum placeholder (8 spaces)
+        TypeFlag,                                     % typeflag
+        (pad_right(<<>>, ?LINKNAME_SIZE))/binary,     % linkname
+        "ustar",                                      % magic
+        0,                                            % null after magic
+        "00",                                         % version
+        (pad_right(~"root", ?UNAME_SIZE))/binary,     % uname
+        (pad_right(~"root", ?GNAME_SIZE))/binary,     % gname
+        (octal(0, ?DEVMAJOR_SIZE))/binary,            % devmajor
+        (octal(0, ?DEVMINOR_SIZE))/binary,            % devminor
+        (pad_right(Prefix, ?PREFIX_SIZE))/binary      % prefix
     >>,
     
     %% Pad to full block size
@@ -205,7 +205,7 @@ split_name(Name) ->
 -spec find_split_point(binary()) -> {ok, binary(), binary()} | error.
 find_split_point(Name) ->
     %% Find last / that gives us a valid split
-    case binary:matches(Name, <<"/">>) of
+    case binary:matches(Name, ~"/") of
         [] -> error;
         Matches ->
             find_valid_split(Name, lists:reverse(Matches))
