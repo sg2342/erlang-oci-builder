@@ -170,30 +170,84 @@ save_tarball(Image, Path, Opts) ->
 
 %% Download base image layers from registry
 -spec build_base_layers(ocibuild:image()) -> [{binary(), binary(), integer()}].
-build_base_layers(#{
-    base := {Registry, Repo, _Tag},
-    base_manifest := #{~"layers" := ManifestLayers}
-}) ->
-    lists:foldl(
-        fun(#{~"digest" := Digest}, Acc) ->
-            case ocibuild_registry:pull_blob(Registry, Repo, Digest) of
+build_base_layers(
+    #{
+        base := {Registry, Repo, _Tag},
+        base_manifest := #{~"layers" := ManifestLayers}
+    } = Image
+) ->
+    Auth = maps:get(auth, Image, #{}),
+    TotalLayers = length(ManifestLayers),
+    {_, Files} = lists:foldl(
+        fun(#{~"digest" := Digest, ~"size" := Size}, {Index, Acc}) ->
+            io:format("  Downloading layer ~B/~B (~s)...~n", [Index, TotalLayers, format_size(Size)]),
+            case pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, 3) of
                 {ok, CompressedData} ->
+                    io:format("  Layer ~B/~B complete~n", [Index, TotalLayers]),
                     %% OCI format keeps layers compressed with digest as path
-                    Acc ++ [{blob_path(Digest), CompressedData, 8#644}];
+                    {Index + 1, Acc ++ [{blob_path(Digest), CompressedData, 8#644}]};
                 {error, Reason} ->
                     io:format(
                         standard_error,
                         "Warning: Could not fetch base layer ~s: ~p~n",
                         [Digest, Reason]
                     ),
-                    Acc
+                    {Index + 1, Acc}
             end
         end,
-        [],
+        {1, []},
         ManifestLayers
-    );
+    ),
+    Files;
 build_base_layers(_Image) ->
     [].
+
+%% Pull blob with retry logic for transient failures
+-spec pull_blob_with_retry(
+    binary(), binary(), binary(), map(), non_neg_integer(), non_neg_integer()
+) ->
+    {ok, binary()} | {error, term()}.
+pull_blob_with_retry(_Registry, _Repo, _Digest, _Auth, _Size, 0) ->
+    {error, max_retries_exceeded};
+pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, RetriesLeft) ->
+    Opts = #{size => Size},
+    case ocibuild_registry:pull_blob(Registry, Repo, Digest, Auth, Opts) of
+        {ok, _Data} = Success ->
+            Success;
+        {error, Reason} = Error ->
+            case is_retriable_error(Reason) of
+                true when RetriesLeft > 1 ->
+                    %% Wait before retry with exponential backoff
+                    Delay = (4 - RetriesLeft) * 1000,
+                    io:format("  Retrying in ~Bs...~n", [Delay div 1000]),
+                    timer:sleep(Delay),
+                    pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, RetriesLeft - 1);
+                _ ->
+                    Error
+            end
+    end.
+
+%% Check if an error is retriable (transient network issues)
+-spec is_retriable_error(term()) -> boolean().
+is_retriable_error({failed_connect, _}) -> true;
+is_retriable_error(timeout) -> true;
+is_retriable_error({http_error, 500, _}) -> true;
+is_retriable_error({http_error, 502, _}) -> true;
+is_retriable_error({http_error, 503, _}) -> true;
+is_retriable_error({http_error, 504, _}) -> true;
+is_retriable_error(closed) -> true;
+is_retriable_error(_) -> false.
+
+%% Format byte size for display
+-spec format_size(non_neg_integer()) -> string().
+format_size(Bytes) when Bytes < 1024 ->
+    io_lib:format("~B B", [Bytes]);
+format_size(Bytes) when Bytes < 1024 * 1024 ->
+    io_lib:format("~.1f KB", [Bytes / 1024]);
+format_size(Bytes) when Bytes < 1024 * 1024 * 1024 ->
+    io_lib:format("~.1f MB", [Bytes / (1024 * 1024)]);
+format_size(Bytes) ->
+    io_lib:format("~.2f GB", [Bytes / (1024 * 1024 * 1024)]).
 
 %% Build the config JSON blob
 -spec build_config_blob(ocibuild:image()) -> {binary(), binary()}.

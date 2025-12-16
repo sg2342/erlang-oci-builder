@@ -41,6 +41,7 @@ ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1">>,
         base := base_ref() | none,
         base_manifest => map(),
         base_config => map(),
+        auth => auth() | #{},
         layers := [layer()],
         config := map()
     }.
@@ -140,6 +141,7 @@ from({Registry, Repo, Tag} = Ref, Auth, Opts) ->
                 base => Ref,
                 base_manifest => Manifest,
                 base_config => Config,
+                auth => Auth,
                 layers => [],
                 config => init_config(Config)
             }};
