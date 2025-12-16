@@ -3,8 +3,8 @@
 -moduledoc """
 OCI image layout handling.
 
-Produces OCI Image Layout format for use with `docker load`,
-`podman load`, or direct filesystem storage.
+Produces OCI Image Layout format for use with `podman load`,
+`skopeo`, or direct filesystem storage.
 
 The layout structure is:
 ```
@@ -15,13 +15,13 @@ myimage/
     └── sha256/
         ├── <manifest>   # Manifest JSON
         ├── <config>     # Config JSON
-        └── <layers...>  # Layer tarballs
+        └── <layers...>  # Layer tarballs (gzip compressed)
 ```
 
 See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 """.
 
--export([export_directory/2, save_tarball/2]).
+-export([export_directory/2, save_tarball/2, save_tarball/3]).
 
 -doc """
 Export image as an OCI layout directory.
@@ -57,7 +57,7 @@ export_directory(Image, Path) ->
                 filename:join(Path, "oci-layout"), OciLayout),
 
         %% Write index.json
-        Index = build_index(ManifestDigest, byte_size(ManifestJson)),
+        Index = build_index(ManifestDigest, byte_size(ManifestJson), ~"latest"),
         IndexJson = ocibuild_json:encode(Index),
         ok =
             file:write_file(
@@ -78,8 +78,6 @@ export_directory(Image, Path) ->
                       end,
                       maps:get(layers, Image, [])),
 
-        %% Write base image layers if present (reference only, not data)
-        %% For full functionality, we'd need to fetch and include base layers
         ok
     catch
         error:Reason ->
@@ -89,14 +87,26 @@ export_directory(Image, Path) ->
 -doc """
 Save image as an OCI layout tarball.
 
-Creates a tar.gz file that can be loaded with `docker load` or `podman load`.
+Creates a tar.gz file that can be loaded with `podman load` or other OCI-compliant tools.
 ```
 ok = ocibuild_layout:save_tarball(Image, "./myimage.tar.gz").
+ok = ocibuild_layout:save_tarball(Image, "./myimage.tar.gz", #{tag => <<"myapp:1.0">>}).
 ```
+
+Options:
+- `tag`: Image tag annotation (e.g., `<<"myapp:1.0">>`)
+
+Note: OCI layout works with podman, skopeo, crane, buildah, and other OCI tools.
 """.
 -spec save_tarball(ocibuild:image(), file:filename()) -> ok | {error, term()}.
 save_tarball(Image, Path) ->
+    save_tarball(Image, Path, #{}).
+
+-spec save_tarball(ocibuild:image(), file:filename(), map()) -> ok | {error, term()}.
+save_tarball(Image, Path, Opts) ->
     try
+        Tag = maps:get(tag, Opts, ~"latest"),
+
         %% Build all the blobs and metadata
         {ConfigJson, ConfigDigest} = build_config_blob(Image),
         LayerDescriptors = build_layer_descriptors(Image),
@@ -110,18 +120,22 @@ save_tarball(Image, Path) ->
         %% Build oci-layout
         OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
 
-        %% Build index.json
-        Index = build_index(ManifestDigest, byte_size(ManifestJson)),
+        %% Build index.json with tag annotation for podman/skopeo
+        Index = build_index(ManifestDigest, byte_size(ManifestJson), Tag),
         IndexJson = ocibuild_json:encode(Index),
 
         %% Collect all files for the tarball
+        %% Include base image layers if available
+        BaseLayerFiles = build_base_layers(Image),
+
         Files =
             [{~"oci-layout", OciLayout, 8#644},
              {~"index.json", IndexJson, 8#644},
              {blob_path(ConfigDigest), ConfigJson, 8#644},
              {blob_path(ManifestDigest), ManifestJson, 8#644}]
             ++ [{blob_path(Digest), Data, 8#644}
-                || #{digest := Digest, data := Data} <- maps:get(layers, Image, [])],
+                || #{digest := Digest, data := Data} <- maps:get(layers, Image, [])]
+            ++ BaseLayerFiles,
 
         %% Create the tarball
         TarData = ocibuild_tar:create(Files),
@@ -136,6 +150,28 @@ save_tarball(Image, Path) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+%% Download base image layers from registry
+-spec build_base_layers(ocibuild:image()) -> [{binary(), binary(), integer()}].
+build_base_layers(#{base := {Registry, Repo, _Tag},
+                    base_manifest := #{~"layers" := ManifestLayers}}) ->
+    lists:foldl(
+        fun(#{~"digest" := Digest}, Acc) ->
+            case ocibuild_registry:pull_blob(Registry, Repo, Digest) of
+                {ok, CompressedData} ->
+                    %% OCI format keeps layers compressed with digest as path
+                    Acc ++ [{blob_path(Digest), CompressedData, 8#644}];
+                {error, Reason} ->
+                    io:format(standard_error, "Warning: Could not fetch base layer ~s: ~p~n",
+                              [Digest, Reason]),
+                    Acc
+            end
+        end,
+        [],
+        ManifestLayers
+    );
+build_base_layers(_Image) ->
+    [].
 
 %% Build the config JSON blob
 -spec build_config_blob(ocibuild:image()) -> {binary(), binary()}.
@@ -168,17 +204,21 @@ build_layer_descriptors(#{layers := NewLayers}) ->
           size := Size}
             <- NewLayers].
 
-%% Build the index.json structure
--spec build_index(binary(), non_neg_integer()) -> map().
-build_index(ManifestDigest, ManifestSize) ->
+%% Build the index.json structure with tag annotation
+-spec build_index(binary(), non_neg_integer(), binary()) -> map().
+build_index(ManifestDigest, ManifestSize, Tag) ->
     #{~"schemaVersion" => 2,
       ~"manifests" =>
           [#{~"mediaType" => ~"application/vnd.oci.image.manifest.v1+json",
              ~"digest" => ManifestDigest,
-             ~"size" => ManifestSize}]}.
+             ~"size" => ManifestSize,
+             ~"annotations" => #{
+                 %% This annotation tells podman/skopeo what to name the image
+                 ~"org.opencontainers.image.ref.name" => Tag
+             }}]}.
 
 %% Convert digest to blob path
 -spec blob_path(binary()) -> binary().
 blob_path(Digest) ->
     Encoded = ocibuild_digest:encoded(Digest),
-    <<"blobs/sha256/", Encoded/binary>>. %% Keep as binary interpolation
+    <<"blobs/sha256/", Encoded/binary>>.

@@ -191,14 +191,16 @@ defmodule Mix.Tasks.Ocibuild do
     # Save tarball
     Mix.shell().info("  Saving to #{output_path}")
 
-    case :ocibuild.save(image, to_charlist(output_path)) do
+    save_opts = %{tag: to_binary(tag)}
+
+    case :ocibuild.save(image, to_charlist(output_path), save_opts) do
       :ok ->
         Mix.shell().info("Image saved successfully")
 
         if should_push do
           push_image(image, tag, opts, ocibuild_config)
         else
-          Mix.shell().info("\nTo load the image:\n  docker load < #{output_path}")
+          Mix.shell().info("\nTo load the image:\n  podman load < #{output_path}")
           :ok
         end
 

@@ -31,7 +31,7 @@ ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1">>,
 %% API - Configuration
 -export([entrypoint/2, cmd/2, env/2, workdir/2, expose/2, label/3, user/2]).
 %% API - Output
--export([push/3, push/4, save/2, export/2]).
+-export([push/3, push/4, save/2, save/3, export/2]).
 
 %% Types
 -export_type([image/0, layer/0, auth/0, base_ref/0]).
@@ -130,7 +130,8 @@ scratch() ->
      #{base => none,
        layers => [],
        config =>
-           #{~"architecture" => ~"amd64",
+           #{~"created" => iso8601_now(),
+             ~"architecture" => ~"amd64",
              ~"os" => ~"linux",
              ~"config" => #{},
              ~"rootfs" => #{~"type" => ~"layers", ~"diff_ids" => []},
@@ -280,16 +281,25 @@ push(Image, Registry, RepoTag, Auth) ->
     ocibuild_registry:push(Image, Registry, Repo, Tag, Auth).
 
 -doc """
-Save the image as an OCI layout tarball.
+Save the image as a tarball.
 
 The resulting tarball can be loaded with `docker load` or `podman load`:
 ```
 ok = ocibuild:save(Image, "myimage.tar.gz").
+ok = ocibuild:save(Image, "myimage.tar.gz", #{tag => <<"myapp:1.0">>}).
 ```
+
+Options:
+- `tag`: Image tag for Docker format (required for proper image naming)
+- `format`: `docker` (default) or `oci`
 """.
 -spec save(image(), file:filename()) -> ok | {error, term()}.
 save(Image, Path) ->
-    ocibuild_layout:save_tarball(Image, Path).
+    save(Image, Path, #{}).
+
+-spec save(image(), file:filename(), map()) -> ok | {error, term()}.
+save(Image, Path, Opts) ->
+    ocibuild_layout:save_tarball(Image, Path, Opts).
 
 -doc """
 Export the image as an OCI layout directory.
@@ -372,7 +382,8 @@ parse_repo_tag(RepoTag) ->
 -spec init_config(map()) -> map().
 init_config(BaseConfig) ->
     %% Initialize config from base, preserving architecture/os
-    #{~"architecture" => maps:get(~"architecture", BaseConfig, ~"amd64"),
+    #{~"created" => iso8601_now(),
+      ~"architecture" => maps:get(~"architecture", BaseConfig, ~"amd64"),
       ~"os" => maps:get(~"os", BaseConfig, ~"linux"),
       ~"config" => maps:get(~"config", BaseConfig, #{}),
       ~"rootfs" =>

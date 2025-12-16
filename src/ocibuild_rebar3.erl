@@ -351,7 +351,8 @@ output_image(State, Args, Config, Tag, Image) ->
 
     %% Save tarball
     rebar_api:info("Saving image to ~s", [OutputPath]),
-    case ocibuild:save(Image, OutputPath) of
+    SaveOpts = #{tag => Tag},
+    case ocibuild:save(Image, OutputPath, SaveOpts) of
         ok ->
             rebar_api:info("Image saved successfully", []),
 
@@ -360,7 +361,7 @@ output_image(State, Args, Config, Tag, Image) ->
                 true ->
                     push_image(State, Args, Config, Tag, Image);
                 false ->
-                    rebar_api:console("~nTo load the image:~n  docker load < ~s~n", [OutputPath]),
+                    rebar_api:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
                     {ok, State}
             end;
         {error, Reason} ->

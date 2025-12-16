@@ -4,11 +4,11 @@
 OCI image layer creation.
 
 An OCI layer is a gzip-compressed tar archive with two digests:
-- `digest`: SHA256 of the compressed data (used for transfer)
-- `diff_id`: SHA256 of the uncompressed tar (used in config)
+- `digest`: SHA256 of the compressed data (used for transfer/manifest)
+- `diff_id`: SHA256 of the uncompressed tar (used in config rootfs)
 """.
 
--export([create/1, media_type/0, media_type/1]).
+-export([create/1]).
 
 -type layer() ::
     #{media_type := binary(),
@@ -51,22 +51,8 @@ create(Files) ->
     %% Calculate digest from compressed data
     Digest = ocibuild_digest:sha256(Compressed),
 
-    #{media_type => media_type(),
+    #{media_type => ocibuild_manifest:layer_media_type(),
       digest => Digest,
       diff_id => DiffId,
       size => byte_size(Compressed),
       data => Compressed}.
-
--doc "Return the default OCI media type for layers.".
--spec media_type() -> binary().
-media_type() ->
-    ~"application/vnd.oci.image.layer.v1.tar+gzip".
-
--doc "Return the media type for a specific compression format.".
--spec media_type(gzip | zstd | none) -> binary().
-media_type(gzip) ->
-    ~"application/vnd.oci.image.layer.v1.tar+gzip";
-media_type(zstd) ->
-    ~"application/vnd.oci.image.layer.v1.tar+zstd";
-media_type(none) ->
-    ~"application/vnd.oci.image.layer.v1.tar".
