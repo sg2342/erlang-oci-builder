@@ -8,14 +8,7 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_digest).
 
--export([
-    sha256/1,
-    sha256_hex/1,
-    from_hex/1,
-    to_hex/1,
-    algorithm/1,
-    encoded/1
-]).
+-export([sha256/1, sha256_hex/1, from_hex/1, to_hex/1, algorithm/1, encoded/1]).
 
 -type digest() :: binary(). %% <<"sha256:abc123...">>
 
@@ -48,7 +41,8 @@ from_hex(Hex) when is_binary(Hex) ->
 %% @doc Convert binary to lowercase hex string.
 -spec to_hex(binary()) -> binary().
 to_hex(Bin) when is_binary(Bin) ->
-    string:lowercase(binary:encode_hex(Bin)).
+    string:lowercase(
+        binary:encode_hex(Bin)).
 
 %% @doc Extract the algorithm from a digest.
 %%
@@ -58,8 +52,10 @@ to_hex(Bin) when is_binary(Bin) ->
 -spec algorithm(digest()) -> binary().
 algorithm(Digest) when is_binary(Digest) ->
     case binary:split(Digest, <<":">>) of
-        [Alg, _] -> Alg;
-        _ -> error({invalid_digest, Digest})
+        [Alg, _] ->
+            Alg;
+        _ ->
+            error({invalid_digest, Digest})
     end.
 
 %% @doc Extract the encoded hash from a digest.
@@ -70,6 +66,8 @@ algorithm(Digest) when is_binary(Digest) ->
 -spec encoded(digest()) -> binary().
 encoded(Digest) when is_binary(Digest) ->
     case binary:split(Digest, <<":">>) of
-        [_, Encoded] -> Encoded;
-        _ -> error({invalid_digest, Digest})
+        [_, Encoded] ->
+            Encoded;
+        _ ->
+            error({invalid_digest, Digest})
     end.

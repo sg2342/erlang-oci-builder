@@ -9,24 +9,17 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_manifest).
 
--export([
-    build/2,
-    media_type/0,
-    config_media_type/0
-]).
+-export([build/2, media_type/0, config_media_type/0]).
 
--type descriptor() :: #{
-    mediaType := binary(),
-    digest := binary(),
-    size := non_neg_integer()
-}.
-
--type manifest() :: #{
-    schemaVersion := integer(),
-    mediaType := binary(),
-    config := descriptor(),
-    layers := [descriptor()]
-}.
+-type descriptor() ::
+    #{mediaType := binary(),
+      digest := binary(),
+      size := non_neg_integer()}.
+-type manifest() ::
+    #{schemaVersion := integer(),
+      mediaType := binary(),
+      config := descriptor(),
+      layers := [descriptor()]}.
 
 -export_type([manifest/0, descriptor/0]).
 
@@ -36,12 +29,11 @@
 %% a complete OCI manifest.
 -spec build(descriptor(), [descriptor()]) -> {binary(), binary()}.
 build(ConfigDescriptor, LayerDescriptors) ->
-    Manifest = #{
-        <<"schemaVersion">> => 2,
-        <<"mediaType">> => media_type(),
-        <<"config">> => ConfigDescriptor,
-        <<"layers">> => LayerDescriptors
-    },
+    Manifest =
+        #{<<"schemaVersion">> => 2,
+          <<"mediaType">> => media_type(),
+          <<"config">> => ConfigDescriptor,
+          <<"layers">> => LayerDescriptors},
     Json = ocibuild_json:encode(Manifest),
     Digest = ocibuild_digest:sha256(Json),
     {Json, Digest}.

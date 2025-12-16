@@ -14,13 +14,9 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_tar).
 
--export([
-    create/1,
-    create_compressed/1
-]).
+-export([create/1, create_compressed/1]).
 
 -define(BLOCK_SIZE, 512).
-
 %% TAR header field offsets and sizes (POSIX ustar format)
 -define(NAME_OFFSET, 0).
 -define(NAME_SIZE, 100).
@@ -51,7 +47,6 @@
 -define(DEVMINOR_SIZE, 8).
 -define(PREFIX_OFFSET, 345).
 -define(PREFIX_SIZE, 155).
-
 %% Type flags
 -define(FILETYPE, $0).     %% Regular file
 -define(DIRTYPE, $5).      %% Directory
@@ -71,18 +66,19 @@
 create(Files) ->
     %% Collect all directories that need to be created
     Dirs = collect_directories(Files),
-    
+
     %% Build directory entries first, then file entries
     DirEntries = [build_dir_entry(Dir) || Dir <- lists:sort(Dirs)],
     FileEntries = [build_file_entry(Path, Content, Mode) || {Path, Content, Mode} <- Files],
-    
+
     %% End of archive marker: two 512-byte zero blocks
     EndMarker = <<0:(?BLOCK_SIZE * 2 * 8)>>,
-    
+
     iolist_to_binary([DirEntries, FileEntries, EndMarker]).
 
 %% @doc Create a gzip-compressed TAR archive in memory.
--spec create_compressed([{Path :: binary(), Content :: binary(), Mode :: integer()}]) -> binary().
+-spec create_compressed([{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
+                           binary().
 create_compressed(Files) ->
     Tar = create(Files),
     zlib:gzip(Tar).
@@ -94,23 +90,24 @@ create_compressed(Files) ->
 %% Collect unique parent directories from file paths
 -spec collect_directories([{binary(), binary(), integer()}]) -> [binary()].
 collect_directories(Files) ->
-    AllDirs = lists:foldl(
-        fun({Path, _, _}, Acc) ->
-            %% Normalize path and get all parent directories
-            NormPath = normalize_path(Path),
-            parent_dirs(NormPath, Acc)
-        end,
-        sets:new([{version, 2}]),
-        Files
-    ),
+    AllDirs =
+        lists:foldl(fun({Path, _, _}, Acc) ->
+                       %% Normalize path and get all parent directories
+                       NormPath = normalize_path(Path),
+                       parent_dirs(NormPath, Acc)
+                    end,
+                    sets:new([{version, 2}]),
+                    Files),
     sets:to_list(AllDirs).
 
 %% Get all parent directories for a path
 -spec parent_dirs(binary(), sets:set(binary())) -> sets:set(binary()).
 parent_dirs(Path, Acc) ->
     case filename:dirname(Path) of
-        ~"." -> Acc;
-        ~"/" -> Acc;
+        <<"."/utf8>> ->
+            Acc;
+        <<"/"/utf8>> ->
+            Acc;
         Parent ->
             Acc1 = sets:add_element(Parent, Acc),
             parent_dirs(Parent, Acc1)
@@ -129,10 +126,13 @@ normalize_path(Path) ->
 -spec build_dir_entry(binary()) -> iolist().
 build_dir_entry(Path) ->
     %% Directories have trailing slash in tar
-    DirPath = case binary:last(Path) of
-        $/ -> Path;
-        _ -> <<Path/binary, "/">>
-    end,
+    DirPath =
+        case binary:last(Path) of
+            $/ ->
+                Path;
+            _ ->
+                <<Path/binary, "/">>
+        end,
     NormPath = normalize_path(DirPath),
     Header = build_header(NormPath, 0, 8#755, ?DIRTYPE),
     [Header].
@@ -151,39 +151,37 @@ build_file_entry(Path, Content, Mode) ->
 build_header(Name, Size, Mode, TypeFlag) ->
     %% Handle long names using prefix field if needed
     {Prefix, ShortName} = split_name(Name),
-    
+
     MTime = erlang:system_time(second),
-    
+
     %% Build header with placeholder checksum (spaces)
-    H0 = <<
-        (pad_right(ShortName, ?NAME_SIZE))/binary,    % name
-        (octal(Mode, ?MODE_SIZE))/binary,             % mode
-        (octal(0, ?UID_SIZE))/binary,                 % uid
-        (octal(0, ?GID_SIZE))/binary,                 % gid
-        (octal(Size, ?SIZE_SIZE))/binary,             % size
-        (octal(MTime, ?MTIME_SIZE))/binary,           % mtime
-        "        ",                                   % checksum placeholder (8 spaces)
-        TypeFlag,                                     % typeflag
-        (pad_right(<<>>, ?LINKNAME_SIZE))/binary,     % linkname
-        "ustar",                                      % magic
-        0,                                            % null after magic
-        "00",                                         % version
-        (pad_right(~"root", ?UNAME_SIZE))/binary,     % uname
-        (pad_right(~"root", ?GNAME_SIZE))/binary,     % gname
-        (octal(0, ?DEVMAJOR_SIZE))/binary,            % devmajor
-        (octal(0, ?DEVMINOR_SIZE))/binary,            % devminor
-        (pad_right(Prefix, ?PREFIX_SIZE))/binary      % prefix
-    >>,
-    
+    H0 = <<(pad_right(ShortName, ?NAME_SIZE))/binary,    % name
+           (octal(Mode, ?MODE_SIZE))/binary,             % mode
+           (octal(0, ?UID_SIZE))/binary,                 % uid
+           (octal(0, ?GID_SIZE))/binary,                 % gid
+           (octal(Size, ?SIZE_SIZE))/binary,             % size
+           (octal(MTime, ?MTIME_SIZE))/binary,           % mtime
+           "        ",                                   % checksum placeholder (8 spaces)
+           TypeFlag,                                     % typeflag
+           (pad_right(<<>>, ?LINKNAME_SIZE))/binary,     % linkname
+           "ustar",                                      % magic
+           0,                                            % null after magic
+           "00",                                         % version
+           (pad_right(<<"root"/utf8>>, ?UNAME_SIZE))/binary,     % uname
+           (pad_right(<<"root"/utf8>>, ?GNAME_SIZE))/binary,     % gname
+           (octal(0, ?DEVMAJOR_SIZE))/binary,            % devmajor
+           (octal(0, ?DEVMINOR_SIZE))/binary,            % devminor
+           (pad_right(Prefix, ?PREFIX_SIZE))/binary>>,      % prefix
+
     %% Pad to full block size
     H1 = pad_right(H0, ?BLOCK_SIZE),
-    
+
     %% Calculate and insert checksum
     Checksum = compute_checksum(H1),
     ChecksumStr = octal_checksum(Checksum),
-    
+
     %% Replace placeholder with actual checksum
-    <<Before:?CHECKSUM_OFFSET/binary, _:?CHECKSUM_SIZE/binary, After/binary>> = H1,
+    <<Before:(?CHECKSUM_OFFSET)/binary, _:(?CHECKSUM_SIZE)/binary, After/binary>> = H1,
     <<Before/binary, ChecksumStr/binary, After/binary>>.
 
 %% Split name into prefix and name if too long
@@ -193,8 +191,8 @@ split_name(Name) when byte_size(Name) =< ?NAME_SIZE ->
 split_name(Name) ->
     %% Try to find a good split point (at a /)
     case find_split_point(Name) of
-        {ok, Prefix, ShortName} when byte_size(ShortName) =< ?NAME_SIZE,
-                                     byte_size(Prefix) =< ?PREFIX_SIZE ->
+        {ok, Prefix, ShortName}
+            when byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE ->
             {Prefix, ShortName};
         _ ->
             %% Truncate if we can't split properly
@@ -205,8 +203,9 @@ split_name(Name) ->
 -spec find_split_point(binary()) -> {ok, binary(), binary()} | error.
 find_split_point(Name) ->
     %% Find last / that gives us a valid split
-    case binary:matches(Name, ~"/") of
-        [] -> error;
+    case binary:matches(Name, <<"/"/utf8>>) of
+        [] ->
+            error;
         Matches ->
             find_valid_split(Name, lists:reverse(Matches))
     end.
@@ -216,11 +215,10 @@ find_valid_split(_Name, []) ->
 find_valid_split(Name, [{Pos, _} | Rest]) ->
     Prefix = binary:part(Name, 0, Pos),
     ShortName = binary:part(Name, Pos + 1, byte_size(Name) - Pos - 1),
-    if
-        byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE ->
-            {ok, Prefix, ShortName};
-        true ->
-            find_valid_split(Name, Rest)
+    if byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE ->
+           {ok, Prefix, ShortName};
+       true ->
+           find_valid_split(Name, Rest)
     end.
 
 %% Compute checksum (sum of all bytes, treating checksum field as spaces)
@@ -266,6 +264,8 @@ pad_right(Bin, Len) ->
 -spec padding(non_neg_integer()) -> binary().
 padding(Size) ->
     case Size rem ?BLOCK_SIZE of
-        0 -> <<>>;
-        R -> <<0:((?BLOCK_SIZE - R) * 8)>>
+        0 ->
+            <<>>;
+        R ->
+            <<0:((?BLOCK_SIZE - R) * 8)>>
     end.

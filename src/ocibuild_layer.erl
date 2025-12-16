@@ -10,19 +10,14 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_layer).
 
--export([
-    create/1,
-    media_type/0,
-    media_type/1
-]).
+-export([create/1, media_type/0, media_type/1]).
 
--type layer() :: #{
-    media_type := binary(),
-    digest := binary(),
-    diff_id := binary(),
-    size := non_neg_integer(),
-    data := binary()
-}.
+-type layer() ::
+    #{media_type := binary(),
+      digest := binary(),
+      diff_id := binary(),
+      size := non_neg_integer(),
+      data := binary()}.
 
 -export_type([layer/0]).
 
@@ -46,23 +41,21 @@
 create(Files) ->
     %% Create uncompressed tar
     Tar = ocibuild_tar:create(Files),
-    
+
     %% Calculate diff_id from uncompressed tar
     DiffId = ocibuild_digest:sha256(Tar),
-    
+
     %% Compress
     Compressed = zlib:gzip(Tar),
-    
+
     %% Calculate digest from compressed data
     Digest = ocibuild_digest:sha256(Compressed),
-    
-    #{
-        media_type => media_type(),
-        digest => Digest,
-        diff_id => DiffId,
-        size => byte_size(Compressed),
-        data => Compressed
-    }.
+
+    #{media_type => media_type(),
+      digest => Digest,
+      diff_id => DiffId,
+      size => byte_size(Compressed),
+      data => Compressed}.
 
 %% @doc Return the default OCI media type for layers.
 -spec media_type() -> binary().

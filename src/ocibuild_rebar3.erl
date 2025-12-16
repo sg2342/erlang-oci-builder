@@ -16,16 +16,16 @@
 %%% @end
 %%%-------------------------------------------------------------------
 -module(ocibuild_rebar3).
+
 -behaviour(provider).
 
 -export([init/1, do/1, format_error/1]).
-
 %% Exported for use by Mix task (Elixir integration)
 -export([collect_release_files/1, build_image/7, get_auth/0]).
 
 -define(PROVIDER, ocibuild).
 -define(DEPS, [release]).
--define(DEFAULT_BASE_IMAGE, <<"debian:slim">>).
+-define(DEFAULT_BASE_IMAGE, <<"debian:stable-slim">>).
 -define(DEFAULT_WORKDIR, <<"/app">>).
 
 %%%===================================================================
@@ -35,24 +35,26 @@
 %% @doc Initialize the provider and register CLI options.
 -spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
 init(State) ->
-    Provider = providers:create([
-        {name, ?PROVIDER},
-        {module, ?MODULE},
-        {bare, true},
-        {deps, ?DEPS},
-        {desc, "Build OCI container images from Erlang releases"},
-        {short_desc, "Build OCI images"},
-        {example, "rebar3 ocibuild -t myapp:1.0.0"},
-        {opts, [
-            {tag, $t, "tag", string, "Image tag (e.g., myapp:1.0.0)"},
-            {registry, $r, "registry", string, "Registry for push (e.g., ghcr.io)"},
-            {output, $o, "output", string, "Output tarball path"},
-            {push, undefined, "push", {boolean, false}, "Push to registry after build"},
-            {base, undefined, "base", string, "Override base image"},
-            {release, undefined, "release", string, "Release name (if multiple)"}
-        ]},
-        {profiles, [default, prod]}
-    ]),
+    Provider =
+        providers:create([{name, ?PROVIDER},
+                          {module, ?MODULE},
+                          {bare, true},
+                          {deps, ?DEPS},
+                          {desc, "Build OCI container images from Erlang releases"},
+                          {short_desc, "Build OCI images"},
+                          {example, "rebar3 ocibuild -t myapp:1.0.0"},
+                          {opts,
+                           [{tag, $t, "tag", string, "Image tag (e.g., myapp:1.0.0)"},
+                            {registry, $r, "registry", string, "Registry for push (e.g., ghcr.io)"},
+                            {output, $o, "output", string, "Output tarball path"},
+                            {push,
+                             undefined,
+                             "push",
+                             {boolean, false},
+                             "Push to registry after build"},
+                            {base, undefined, "base", string, "Override base image"},
+                            {release, undefined, "release", string, "Release name (if multiple)"}]},
+                          {profiles, [default, prod]}]),
     {ok, rebar_state:add_provider(State, Provider)}.
 
 %% @doc Execute the provider - build OCI image from release.
@@ -140,8 +142,10 @@ get_release_name(Args, RelxConfig) ->
         undefined ->
             %% Try to get from relx config
             case find_relx_release(RelxConfig) of
-                {ok, Name} -> {ok, Name};
-                error -> {error, {no_release_configured, RelxConfig}}
+                {ok, Name} ->
+                    {ok, Name};
+                error ->
+                    {error, {no_release_configured, RelxConfig}}
             end;
         Name ->
             {ok, Name}
@@ -163,7 +167,7 @@ collect_release_files(ReleasePath) ->
         Files = collect_files_recursive(ReleasePath, ReleasePath),
         {ok, Files}
     catch
-        throw:{file_error, Path, Reason} ->
+        {file_error, Path, Reason} ->
             {error, {file_read_error, Path, Reason}}
     end.
 
@@ -172,14 +176,15 @@ collect_files_recursive(BasePath, CurrentPath) ->
     case file:list_dir(CurrentPath) of
         {ok, Entries} ->
             lists:flatmap(fun(Entry) ->
-                FullPath = filename:join(CurrentPath, Entry),
-                case filelib:is_dir(FullPath) of
-                    true ->
-                        collect_files_recursive(BasePath, FullPath);
-                    false ->
-                        [collect_single_file(BasePath, FullPath)]
-                end
-            end, Entries);
+                             FullPath = filename:join(CurrentPath, Entry),
+                             case filelib:is_dir(FullPath) of
+                                 true ->
+                                     collect_files_recursive(BasePath, FullPath);
+                                 false ->
+                                     [collect_single_file(BasePath, FullPath)]
+                             end
+                          end,
+                          Entries);
         {error, Reason} ->
             throw({file_error, CurrentPath, Reason})
     end.
@@ -210,7 +215,7 @@ make_relative_path(BasePath, FullPath) ->
     %% Remove the base prefix from the full path
     strip_prefix(BaseNorm, FullNorm).
 
-strip_prefix([H|T1], [H|T2]) ->
+strip_prefix([H | T1], [H | T2]) ->
     strip_prefix(T1, T2);
 strip_prefix([], Remaining) ->
     filename:join(Remaining);
@@ -267,16 +272,19 @@ get_base_image(Args, Config) ->
 build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
     try
         %% Start from base image or scratch
-        Image0 = case BaseImage of
-            <<"scratch">> ->
-                {ok, Img} = ocibuild:scratch(),
-                Img;
-            _ ->
-                case ocibuild:from(BaseImage) of
-                    {ok, Img} -> Img;
-                    {error, FromErr} -> throw({base_image_failed, FromErr})
-                end
-        end,
+        Image0 =
+            case BaseImage of
+                <<"scratch">> ->
+                    {ok, Img} = ocibuild:scratch(),
+                    Img;
+                _ ->
+                    case ocibuild:from(BaseImage) of
+                        {ok, Img} ->
+                            Img;
+                        {error, FromErr} ->
+                            throw({base_image_failed, FromErr})
+                    end
+            end,
 
         %% Add release files as a layer
         Image1 = ocibuild:add_layer(Image0, Files),
@@ -290,24 +298,28 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels)
         Image3 = ocibuild:entrypoint(Image2, Entrypoint),
 
         %% Set environment variables
-        Image4 = case map_size(EnvMap) of
-            0 -> Image3;
-            _ -> ocibuild:env(Image3, EnvMap)
-        end,
+        Image4 =
+            case map_size(EnvMap) of
+                0 ->
+                    Image3;
+                _ ->
+                    ocibuild:env(Image3, EnvMap)
+            end,
 
         %% Expose ports
-        Image5 = lists:foldl(fun(Port, Img) ->
-            ocibuild:expose(Img, Port)
-        end, Image4, ExposePorts),
+        Image5 =
+            lists:foldl(fun(Port, Img) -> ocibuild:expose(Img, Port) end, Image4, ExposePorts),
 
         %% Add labels
-        Image6 = maps:fold(fun(Key, Value, Img) ->
-            ocibuild:label(Img, to_binary(Key), to_binary(Value))
-        end, Image5, Labels),
+        Image6 =
+            maps:fold(fun(Key, Value, Img) -> ocibuild:label(Img, to_binary(Key), to_binary(Value))
+                      end,
+                      Image5,
+                      Labels),
 
         {ok, Image6}
     catch
-        throw:Reason ->
+        Reason ->
             {error, Reason}
     end.
 
@@ -316,15 +328,22 @@ output_image(State, Args, Config, Tag, Image) ->
     ShouldPush = proplists:get_value(push, Args, false),
 
     %% Determine output path
-    OutputPath = case proplists:get_value(output, Args) of
-        undefined ->
-            %% Default: <tag>.tar.gz (with : replaced by -)
-            TagStr = binary_to_list(Tag),
-            SafeTag = lists:map(fun($:) -> $-; (C) -> C end, TagStr),
-            SafeTag ++ ".tar.gz";
-        Path ->
-            Path
-    end,
+    OutputPath =
+        case proplists:get_value(output, Args) of
+            undefined ->
+                %% Default: <tag>.tar.gz (with : replaced by -)
+                TagStr = binary_to_list(Tag),
+                SafeTag =
+                    lists:map(fun ($:) ->
+                                      $-;
+                                  (C) ->
+                                      C
+                              end,
+                              TagStr),
+                SafeTag ++ ".tar.gz";
+            Path ->
+                Path
+        end,
 
     %% Save tarball
     rebar_api:info("Saving image to ~s", [OutputPath]),
@@ -347,12 +366,13 @@ output_image(State, Args, Config, Tag, Image) ->
 %% @private Push image to registry
 push_image(State, Args, Config, Tag, Image) ->
     %% Get registry
-    Registry = case proplists:get_value(registry, Args) of
-        undefined ->
-            proplists:get_value(registry, Config, <<"docker.io">>);
-        Reg ->
-            list_to_binary(Reg)
-    end,
+    Registry =
+        case proplists:get_value(registry, Args) of
+            undefined ->
+                proplists:get_value(registry, Config, <<"docker.io">>);
+            Reg ->
+                list_to_binary(Reg)
+        end,
 
     %% Parse tag to get repository and tag parts
     {Repo, ImageTag} = parse_tag(Tag),
@@ -373,8 +393,10 @@ push_image(State, Args, Config, Tag, Image) ->
 %% @private Parse tag into repo and tag parts
 parse_tag(Tag) ->
     case binary:split(Tag, <<":">>) of
-        [Repo, ImageTag] -> {Repo, ImageTag};
-        [Repo] -> {Repo, <<"latest">>}
+        [Repo, ImageTag] ->
+            {Repo, ImageTag};
+        [Repo] ->
+            {Repo, <<"latest">>}
     end.
 
 %% @private Get authentication from environment variables
@@ -382,17 +404,21 @@ get_auth() ->
     case os:getenv("OCIBUILD_TOKEN") of
         false ->
             case {os:getenv("OCIBUILD_USERNAME"), os:getenv("OCIBUILD_PASSWORD")} of
-                {false, _} -> #{};
-                {_, false} -> #{};
+                {false, _} ->
+                    #{};
+                {_, false} ->
+                    #{};
                 {User, Pass} ->
-                    #{username => list_to_binary(User),
-                      password => list_to_binary(Pass)}
+                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
             end;
         Token ->
             #{token => list_to_binary(Token)}
     end.
 
 %% @private Convert to binary if needed
-to_binary(Bin) when is_binary(Bin) -> Bin;
-to_binary(List) when is_list(List) -> list_to_binary(List);
-to_binary(Atom) when is_atom(Atom) -> atom_to_binary(Atom, utf8).
+to_binary(Bin) when is_binary(Bin) ->
+    Bin;
+to_binary(List) when is_list(List) ->
+    list_to_binary(List);
+to_binary(Atom) when is_atom(Atom) ->
+    atom_to_binary(Atom, utf8).

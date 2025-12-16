@@ -51,10 +51,9 @@ collect_empty_dir_test() ->
 %%%===================================================================
 
 build_scratch_image_test() ->
-    Files = [
-        {<<"/app/bin/myapp">>, <<"#!/bin/sh\necho hello">>, 8#755},
-        {<<"/app/lib/myapp.beam">>, <<"beam_data">>, 8#644}
-    ],
+    Files =
+        [{<<"/app/bin/myapp">>, <<"#!/bin/sh\necho hello">>, 8#755},
+         {<<"/app/lib/myapp.beam">>, <<"beam_data">>, 8#644}],
 
     {ok, Image} = build_test_image(<<"scratch">>, Files, "myapp"),
 
@@ -73,8 +72,8 @@ build_with_env_test() ->
     Files = [{<<"/app/test">>, <<"data">>, 8#644}],
     EnvMap = #{<<"LANG">> => <<"C.UTF-8">>, <<"PORT">> => <<"8080">>},
 
-    {ok, Image} = build_test_image_with_opts(<<"scratch">>, Files, "myapp",
-                                              <<"/app">>, EnvMap, [], #{}),
+    {ok, Image} =
+        build_test_image_with_opts(<<"scratch">>, Files, "myapp", <<"/app">>, EnvMap, [], #{}),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(<<"config">>, Config),
@@ -87,8 +86,14 @@ build_with_env_test() ->
 build_with_exposed_ports_test() ->
     Files = [{<<"/app/test">>, <<"data">>, 8#644}],
 
-    {ok, Image} = build_test_image_with_opts(<<"scratch">>, Files, "myapp",
-                                              <<"/app">>, #{}, [8080, 443], #{}),
+    {ok, Image} =
+        build_test_image_with_opts(<<"scratch">>,
+                                   Files,
+                                   "myapp",
+                                   <<"/app">>,
+                                   #{},
+                                   [8080, 443],
+                                   #{}),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(<<"config">>, Config),
@@ -101,8 +106,8 @@ build_with_labels_test() ->
     Files = [{<<"/app/test">>, <<"data">>, 8#644}],
     Labels = #{<<"org.opencontainers.image.version">> => <<"1.0.0">>},
 
-    {ok, Image} = build_test_image_with_opts(<<"scratch">>, Files, "myapp",
-                                              <<"/app">>, #{}, [], Labels),
+    {ok, Image} =
+        build_test_image_with_opts(<<"scratch">>, Files, "myapp", <<"/app">>, #{}, [], Labels),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(<<"config">>, Config),
@@ -168,7 +173,7 @@ collect_release_files(ReleasePath) ->
         Files = collect_files_recursive(ReleasePath, ReleasePath),
         {ok, Files}
     catch
-        throw:{file_error, Path, Reason} ->
+        {file_error, Path, Reason} ->
             {error, {file_read_error, Path, Reason}}
     end.
 
@@ -176,14 +181,15 @@ collect_files_recursive(BasePath, CurrentPath) ->
     case file:list_dir(CurrentPath) of
         {ok, Entries} ->
             lists:flatmap(fun(Entry) ->
-                FullPath = filename:join(CurrentPath, Entry),
-                case filelib:is_dir(FullPath) of
-                    true ->
-                        collect_files_recursive(BasePath, FullPath);
-                    false ->
-                        [collect_single_file(BasePath, FullPath)]
-                end
-            end, Entries);
+                             FullPath = filename:join(CurrentPath, Entry),
+                             case filelib:is_dir(FullPath) of
+                                 true ->
+                                     collect_files_recursive(BasePath, FullPath);
+                                 false ->
+                                     [collect_single_file(BasePath, FullPath)]
+                             end
+                          end,
+                          Entries);
         {error, Reason} ->
             throw({file_error, CurrentPath, Reason})
     end.
@@ -205,7 +211,7 @@ make_relative_path(BasePath, FullPath) ->
     %% Remove the base prefix from the full path
     strip_prefix(BaseNorm, FullNorm).
 
-strip_prefix([H|T1], [H|T2]) ->
+strip_prefix([H | T1], [H | T2]) ->
     strip_prefix(T1, T2);
 strip_prefix([], Remaining) ->
     filename:join(Remaining);
@@ -230,12 +236,19 @@ get_file_mode(FilePath) ->
 build_test_image(BaseImage, Files, ReleaseName) ->
     build_test_image_with_opts(BaseImage, Files, ReleaseName, <<"/app">>, #{}, [], #{}).
 
-build_test_image_with_opts(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
-    Image0 = case BaseImage of
-        <<"scratch">> ->
-            {ok, Img} = ocibuild:scratch(),
-            Img
-    end,
+build_test_image_with_opts(BaseImage,
+                           Files,
+                           ReleaseName,
+                           Workdir,
+                           EnvMap,
+                           ExposePorts,
+                           Labels) ->
+    Image0 =
+        case BaseImage of
+            <<"scratch">> ->
+                {ok, Img} = ocibuild:scratch(),
+                Img
+        end,
 
     Image1 = ocibuild:add_layer(Image0, Files),
     Image2 = ocibuild:workdir(Image1, Workdir),
@@ -244,36 +257,42 @@ build_test_image_with_opts(BaseImage, Files, ReleaseName, Workdir, EnvMap, Expos
     Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, <<"foreground">>],
     Image3 = ocibuild:entrypoint(Image2, Entrypoint),
 
-    Image4 = case map_size(EnvMap) of
-        0 -> Image3;
-        _ -> ocibuild:env(Image3, EnvMap)
-    end,
+    Image4 =
+        case map_size(EnvMap) of
+            0 ->
+                Image3;
+            _ ->
+                ocibuild:env(Image3, EnvMap)
+        end,
 
-    Image5 = lists:foldl(fun(Port, AccImg) ->
-        ocibuild:expose(AccImg, Port)
-    end, Image4, ExposePorts),
+    Image5 =
+        lists:foldl(fun(Port, AccImg) -> ocibuild:expose(AccImg, Port) end, Image4, ExposePorts),
 
-    Image6 = maps:fold(fun(Key, Value, AccImg) ->
-        ocibuild:label(AccImg, Key, Value)
-    end, Image5, Labels),
+    Image6 =
+        maps:fold(fun(Key, Value, AccImg) -> ocibuild:label(AccImg, Key, Value) end,
+                  Image5,
+                  Labels),
 
     {ok, Image6}.
 
 parse_tag(Tag) ->
     case binary:split(Tag, <<":">>) of
-        [Repo, ImageTag] -> {Repo, ImageTag};
-        [Repo] -> {Repo, <<"latest">>}
+        [Repo, ImageTag] ->
+            {Repo, ImageTag};
+        [Repo] ->
+            {Repo, <<"latest">>}
     end.
 
 get_auth() ->
     case os:getenv("OCIBUILD_TOKEN") of
         false ->
             case {os:getenv("OCIBUILD_USERNAME"), os:getenv("OCIBUILD_PASSWORD")} of
-                {false, _} -> #{};
-                {_, false} -> #{};
+                {false, _} ->
+                    #{};
+                {_, false} ->
+                    #{};
                 {User, Pass} ->
-                    #{username => list_to_binary(User),
-                      password => list_to_binary(Pass)}
+                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
             end;
         Token ->
             #{token => list_to_binary(Token)}
@@ -290,10 +309,13 @@ temp_dir() ->
             case os:getenv("TEMP") of
                 false ->
                     case os:getenv("TMP") of
-                        false -> "C:\\Temp";
-                        TmpDir -> TmpDir
+                        false ->
+                            "C:\\Temp";
+                        TmpDir ->
+                            TmpDir
                     end;
-                TempDir -> TempDir
+                TempDir ->
+                    TempDir
             end;
         _ ->
             "/tmp"
@@ -304,10 +326,14 @@ make_temp_dir(Prefix) ->
     Unique = integer_to_list(erlang:unique_integer([positive])),
     DirName = Prefix ++ "_" ++ Unique,
     TmpDir = filename:join(temp_dir(), DirName),
-    ok = filelib:ensure_dir(filename:join(TmpDir, "placeholder")),
+    ok =
+        filelib:ensure_dir(
+            filename:join(TmpDir, "placeholder")),
     case file:make_dir(TmpDir) of
-        ok -> TmpDir;
-        {error, eexist} -> TmpDir
+        ok ->
+            TmpDir;
+        {error, eexist} ->
+            TmpDir
     end.
 
 %% @doc Recursively delete a directory (cross-platform)
@@ -316,12 +342,15 @@ cleanup_temp_dir(Dir) ->
         true ->
             {ok, Files} = file:list_dir(Dir),
             lists:foreach(fun(File) ->
-                Path = filename:join(Dir, File),
-                case filelib:is_dir(Path) of
-                    true -> cleanup_temp_dir(Path);
-                    false -> file:delete(Path)
-                end
-            end, Files),
+                             Path = filename:join(Dir, File),
+                             case filelib:is_dir(Path) of
+                                 true ->
+                                     cleanup_temp_dir(Path);
+                                 false ->
+                                     file:delete(Path)
+                             end
+                          end,
+                          Files),
             file:del_dir(Dir);
         false ->
             ok
@@ -339,9 +368,15 @@ create_mock_release() ->
     LibDir = filename:join([TmpDir, "lib", "myapp-1.0.0", "ebin"]),
     RelDir = filename:join([TmpDir, "releases", "1.0.0"]),
 
-    ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
-    ok = filelib:ensure_dir(filename:join(LibDir, "placeholder")),
-    ok = filelib:ensure_dir(filename:join(RelDir, "placeholder")),
+    ok =
+        filelib:ensure_dir(
+            filename:join(BinDir, "placeholder")),
+    ok =
+        filelib:ensure_dir(
+            filename:join(LibDir, "placeholder")),
+    ok =
+        filelib:ensure_dir(
+            filename:join(RelDir, "placeholder")),
 
     %% Create bin script (executable)
     BinPath = filename:join(BinDir, "myapp"),

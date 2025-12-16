@@ -38,7 +38,7 @@ json_encode_null_test() ->
     ?assertEqual(<<"null">>, ocibuild_json:encode(null)).
 
 json_encode_array_test() ->
-    ?assertEqual(<<"[1,2,3]">>, ocibuild_json:encode([1,2,3])).
+    ?assertEqual(<<"[1,2,3]">>, ocibuild_json:encode([1, 2, 3])).
 
 json_encode_object_test() ->
     %% Note: map ordering is not guaranteed, so we decode and compare
@@ -55,9 +55,7 @@ json_decode_test() ->
 %%%===================================================================
 
 tar_basic_test() ->
-    Files = [
-        {<<"/hello.txt">>, <<"Hello, World!">>, 8#644}
-    ],
+    Files = [{<<"/hello.txt">>, <<"Hello, World!">>, 8#644}],
     Tar = ocibuild_tar:create(Files),
     %% TAR should be a multiple of 512 bytes
     ?assertEqual(0, byte_size(Tar) rem 512),
@@ -65,9 +63,7 @@ tar_basic_test() ->
     ?assert(binary:match(Tar, <<"Hello, World!">>) =/= nomatch).
 
 tar_compressed_test() ->
-    Files = [
-        {<<"/test.txt">>, <<"test content">>, 8#644}
-    ],
+    Files = [{<<"/test.txt">>, <<"test content">>, 8#644}],
     Compressed = ocibuild_tar:create_compressed(Files),
     %% Should start with gzip magic bytes
     <<16#1f, 16#8b, _/binary>> = Compressed,
@@ -78,9 +74,7 @@ tar_compressed_test() ->
 %%%===================================================================
 
 layer_create_test() ->
-    Files = [
-        {<<"/app/test">>, <<"test data">>, 8#755}
-    ],
+    Files = [{<<"/app/test">>, <<"test data">>, 8#755}],
     Layer = ocibuild_layer:create(Files),
 
     %% Check all required fields exist
@@ -127,9 +121,7 @@ image_config_test() ->
 
 add_layer_test() ->
     {ok, Image0} = ocibuild:scratch(),
-    Image1 = ocibuild:add_layer(Image0, [
-        {<<"/test.txt">>, <<"hello">>, 8#644}
-    ]),
+    Image1 = ocibuild:add_layer(Image0, [{<<"/test.txt">>, <<"hello">>, 8#644}]),
 
     Layers = maps:get(layers, Image1),
     ?assertEqual(1, length(Layers)).
@@ -140,9 +132,7 @@ add_layer_test() ->
 
 export_directory_test() ->
     {ok, Image0} = ocibuild:scratch(),
-    Image1 = ocibuild:add_layer(Image0, [
-        {<<"/test.txt">>, <<"hello">>, 8#644}
-    ]),
+    Image1 = ocibuild:add_layer(Image0, [{<<"/test.txt">>, <<"hello">>, 8#644}]),
     Image2 = ocibuild:entrypoint(Image1, [<<"/bin/sh">>]),
 
     TmpDir = make_temp_dir("ocibuild_test_export"),
@@ -150,18 +140,19 @@ export_directory_test() ->
         ok = ocibuild:export(Image2, TmpDir),
 
         %% Check required files exist
-        ?assert(filelib:is_file(filename:join(TmpDir, "oci-layout"))),
-        ?assert(filelib:is_file(filename:join(TmpDir, "index.json"))),
-        ?assert(filelib:is_dir(filename:join([TmpDir, "blobs", "sha256"])))
+        ?assert(filelib:is_file(
+                    filename:join(TmpDir, "oci-layout"))),
+        ?assert(filelib:is_file(
+                    filename:join(TmpDir, "index.json"))),
+        ?assert(filelib:is_dir(
+                    filename:join([TmpDir, "blobs", "sha256"])))
     after
         cleanup_temp_dir(TmpDir)
     end.
 
 save_tarball_test() ->
     {ok, Image0} = ocibuild:scratch(),
-    Image1 = ocibuild:add_layer(Image0, [
-        {<<"/test.txt">>, <<"hello">>, 8#644}
-    ]),
+    Image1 = ocibuild:add_layer(Image0, [{<<"/test.txt">>, <<"hello">>, 8#644}]),
 
     TmpFile = make_temp_file("ocibuild_test_save", ".tar.gz"),
     try
@@ -186,10 +177,13 @@ temp_dir() ->
             case os:getenv("TEMP") of
                 false ->
                     case os:getenv("TMP") of
-                        false -> "C:\\Temp";
-                        TmpDir -> TmpDir
+                        false ->
+                            "C:\\Temp";
+                        TmpDir ->
+                            TmpDir
                     end;
-                TempDir -> TempDir
+                TempDir ->
+                    TempDir
             end;
         _ ->
             "/tmp"
@@ -200,10 +194,14 @@ make_temp_dir(Prefix) ->
     Unique = integer_to_list(erlang:unique_integer([positive])),
     DirName = Prefix ++ "_" ++ Unique,
     TmpDir = filename:join(temp_dir(), DirName),
-    ok = filelib:ensure_dir(filename:join(TmpDir, "placeholder")),
+    ok =
+        filelib:ensure_dir(
+            filename:join(TmpDir, "placeholder")),
     case file:make_dir(TmpDir) of
-        ok -> TmpDir;
-        {error, eexist} -> TmpDir
+        ok ->
+            TmpDir;
+        {error, eexist} ->
+            TmpDir
     end.
 
 %% @doc Create a unique temporary file path
@@ -218,12 +216,15 @@ cleanup_temp_dir(Dir) ->
         true ->
             {ok, Files} = file:list_dir(Dir),
             lists:foreach(fun(File) ->
-                Path = filename:join(Dir, File),
-                case filelib:is_dir(Path) of
-                    true -> cleanup_temp_dir(Path);
-                    false -> file:delete(Path)
-                end
-            end, Files),
+                             Path = filename:join(Dir, File),
+                             case filelib:is_dir(Path) of
+                                 true ->
+                                     cleanup_temp_dir(Path);
+                                 false ->
+                                     file:delete(Path)
+                             end
+                          end,
+                          Files),
             file:del_dir(Dir);
         false ->
             ok

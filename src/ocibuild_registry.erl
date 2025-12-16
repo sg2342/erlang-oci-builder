@@ -10,58 +10,51 @@
 %%%-------------------------------------------------------------------
 -module(ocibuild_registry).
 
--export([
-    pull_manifest/3,
-    pull_manifest/4,
-    pull_blob/3,
-    pull_blob/4,
-    push/5,
-    check_blob_exists/4
-]).
+-export([pull_manifest/3, pull_manifest/4, pull_blob/3, pull_blob/4, push/5,
+         check_blob_exists/4]).
 
 -define(DEFAULT_TIMEOUT, 30000).
-
 %% Registry URL mappings
--define(REGISTRY_URLS, #{
-    <<"docker.io">> => "https://registry-1.docker.io",
-    <<"ghcr.io">> => "https://ghcr.io",
-    <<"gcr.io">> => "https://gcr.io",
-    <<"quay.io">> => "https://quay.io"
-}).
+-define(REGISTRY_URLS,
+        #{<<"docker.io">> => "https://registry-1.docker.io",
+          <<"ghcr.io">> => "https://ghcr.io",
+          <<"gcr.io">> => "https://gcr.io",
+          <<"quay.io">> => "https://quay.io"}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
 %% @doc Pull a manifest and config from a registry.
--spec pull_manifest(binary(), binary(), binary()) -> 
-    {ok, Manifest :: map(), Config :: map()} | {error, term()}.
+-spec pull_manifest(binary(), binary(), binary()) ->
+                       {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref) ->
     pull_manifest(Registry, Repo, Ref, #{}).
 
 %% @doc Pull a manifest and config from a registry with authentication.
--spec pull_manifest(binary(), binary(), binary(), map()) -> 
-    {ok, Manifest :: map(), Config :: map()} | {error, term()}.
+-spec pull_manifest(binary(), binary(), binary(), map()) ->
+                       {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref, Auth) ->
     BaseUrl = registry_url(Registry),
-    
+
     %% Get auth token if needed
     case get_auth_token(Registry, Repo, Auth) of
         {ok, Token} ->
             %% Fetch manifest
-            ManifestUrl = io_lib:format("~s/v2/~s/manifests/~s", 
-                                        [BaseUrl, binary_to_list(Repo), binary_to_list(Ref)]),
-            Headers = auth_headers(Token) ++ [
-                {"Accept", "application/vnd.oci.image.manifest.v1+json"},
-                {"Accept", "application/vnd.docker.distribution.manifest.v2+json"}
-            ],
-            
+            ManifestUrl =
+                io_lib:format("~s/v2/~s/manifests/~s",
+                              [BaseUrl, binary_to_list(Repo), binary_to_list(Ref)]),
+            Headers =
+                auth_headers(Token)
+                ++ [{"Accept", "application/vnd.oci.image.manifest.v1+json"},
+                    {"Accept", "application/vnd.docker.distribution.manifest.v2+json"}],
+
             case http_get(lists:flatten(ManifestUrl), Headers) of
                 {ok, ManifestJson} ->
                     Manifest = ocibuild_json:decode(ManifestJson),
                     %% Fetch config blob
-                    ConfigDescriptor = maps:get(~"config", Manifest),
-                    ConfigDigest = maps:get(~"digest", ConfigDescriptor),
+                    ConfigDescriptor = maps:get(<<"config"/utf8>>, Manifest),
+                    ConfigDigest = maps:get(<<"digest"/utf8>>, ConfigDescriptor),
                     case pull_blob(Registry, Repo, ConfigDigest, Auth) of
                         {ok, ConfigJson} ->
                             Config = ocibuild_json:decode(ConfigJson),
@@ -85,11 +78,11 @@ pull_blob(Registry, Repo, Digest) ->
 -spec pull_blob(binary(), binary(), binary(), map()) -> {ok, binary()} | {error, term()}.
 pull_blob(Registry, Repo, Digest, Auth) ->
     BaseUrl = registry_url(Registry),
-    
+
     case get_auth_token(Registry, Repo, Auth) of
         {ok, Token} ->
             Url = io_lib:format("~s/v2/~s/blobs/~s",
-                               [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
+                                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
             Headers = auth_headers(Token),
             http_get(lists:flatten(Url), Headers);
         {error, _} = Err ->
@@ -100,15 +93,17 @@ pull_blob(Registry, Repo, Digest, Auth) ->
 -spec check_blob_exists(binary(), binary(), binary(), map()) -> boolean().
 check_blob_exists(Registry, Repo, Digest, Auth) ->
     BaseUrl = registry_url(Registry),
-    
+
     case get_auth_token(Registry, Repo, Auth) of
         {ok, Token} ->
             Url = io_lib:format("~s/v2/~s/blobs/~s",
-                               [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
+                                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
             Headers = auth_headers(Token),
             case http_head(lists:flatten(Url), Headers) of
-                {ok, _} -> true;
-                {error, _} -> false
+                {ok, _} ->
+                    true;
+                {error, _} ->
+                    false
             end;
         {error, _} ->
             false
@@ -118,7 +113,7 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
 -spec push(ocibuild:image(), binary(), binary(), binary(), map()) -> ok | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth) ->
     BaseUrl = registry_url(Registry),
-    
+
     case get_auth_token(Registry, Repo, Auth) of
         {ok, Token} ->
             %% Push layers
@@ -128,8 +123,13 @@ push(Image, Registry, Repo, Tag, Auth) ->
                     case push_config(Image, BaseUrl, Repo, Token) of
                         {ok, ConfigDigest, ConfigSize} ->
                             %% Push manifest
-                            push_manifest(Image, BaseUrl, Repo, Tag, Token, 
-                                         ConfigDigest, ConfigSize);
+                            push_manifest(Image,
+                                          BaseUrl,
+                                          Repo,
+                                          Tag,
+                                          Token,
+                                          ConfigDigest,
+                                          ConfigSize);
                         {error, _} = Err ->
                             Err
                     end;
@@ -148,13 +148,16 @@ push(Image, Registry, Repo, Tag, Auth) ->
 -spec registry_url(binary()) -> string().
 registry_url(Registry) ->
     case maps:find(Registry, ?REGISTRY_URLS) of
-        {ok, Url} -> Url;
-        _error -> "https://" ++ binary_to_list(Registry)
+        {ok, Url} ->
+            Url;
+        _error ->
+            "https://" ++ binary_to_list(Registry)
     end.
 
 %% Get authentication token
--spec get_auth_token(binary(), binary(), map()) -> {ok, binary() | none} | {error, term()}.
-get_auth_token(~"docker.io", Repo, Auth) ->
+-spec get_auth_token(binary(), binary(), map()) ->
+                        {ok, binary() | none} | {error, term()}.
+get_auth_token(<<"docker.io"/utf8>>, Repo, Auth) ->
     %% Docker Hub uses token authentication
     docker_hub_auth(Repo, Auth);
 get_auth_token(_Registry, _Repo, #{token := Token}) ->
@@ -171,23 +174,26 @@ get_auth_token(_Registry, _Repo, #{}) ->
 docker_hub_auth(Repo, Auth) ->
     %% Docker Hub requires getting a token from auth.docker.io
     Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
-    Url = "https://auth.docker.io/token?service=registry.docker.io&scope=" ++ 
-          uri_string:quote(Scope),
-    
-    Headers = case Auth of
-        #{username := User, password := Pass} ->
-            Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-            [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
-        _ ->
-            []
-    end,
-    
+    Url = "https://auth.docker.io/token?service=registry.docker.io&scope="
+          ++ uri_string:quote(Scope),
+
+    Headers =
+        case Auth of
+            #{username := User, password := Pass} ->
+                Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
+                [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
+            _ ->
+                []
+        end,
+
     case http_get(Url, Headers) of
         {ok, Body} ->
             Response = ocibuild_json:decode(Body),
-            case maps:find(~"token", Response) of
-                {ok, Token} -> {ok, Token};
-                error -> {error, no_token_in_response}
+            case maps:find(<<"token"/utf8>>, Response) of
+                {ok, Token} ->
+                    {ok, Token};
+                error ->
+                    {error, no_token_in_response}
             end;
         {error, _} = Err ->
             Err
@@ -205,35 +211,36 @@ auth_headers(Token) when is_binary(Token) ->
 %% Push all layers
 -spec push_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
 push_layers(#{layers := Layers}, BaseUrl, Repo, Token) ->
-    lists:foldl(
-        fun(#{digest := Digest, data := Data}, ok) ->
-            push_blob(BaseUrl, Repo, Digest, Data, Token);
-           (_, {error, _} = Err) ->
-            Err
-        end,
-        ok,
-        Layers
-    ).
+    lists:foldl(fun (#{digest := Digest, data := Data}, ok) ->
+                        push_blob(BaseUrl, Repo, Digest, Data, Token);
+                    (_, {error, _} = Err) ->
+                        Err
+                end,
+                ok,
+                Layers).
 
 %% Push config and return its digest and size
--spec push_config(ocibuild:image(), string(), binary(), binary()) -> 
-    {ok, binary(), non_neg_integer()} | {error, term()}.
+-spec push_config(ocibuild:image(), string(), binary(), binary()) ->
+                     {ok, binary(), non_neg_integer()} | {error, term()}.
 push_config(#{config := Config}, BaseUrl, Repo, Token) ->
     ConfigJson = ocibuild_json:encode(Config),
     Digest = ocibuild_digest:sha256(ConfigJson),
     case push_blob(BaseUrl, Repo, Digest, ConfigJson, Token) of
-        ok -> {ok, Digest, byte_size(ConfigJson)};
-        {error, _} = Err -> Err
+        ok ->
+            {ok, Digest, byte_size(ConfigJson)};
+        {error, _} = Err ->
+            Err
     end.
 
 %% Push a single blob
 -spec push_blob(string(), binary(), binary(), binary(), binary()) -> ok | {error, term()}.
 push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     %% Check if blob already exists
-    CheckUrl = io_lib:format("~s/v2/~s/blobs/~s",
-                            [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
+    CheckUrl =
+        io_lib:format("~s/v2/~s/blobs/~s",
+                      [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
     Headers = auth_headers(Token),
-    
+
     case http_head(lists:flatten(CheckUrl), Headers) of
         {ok, _} ->
             %% Blob already exists
@@ -244,13 +251,13 @@ push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     end.
 
 %% Actually upload a blob
--spec do_push_blob(string(), binary(), binary(), binary(), binary()) -> ok | {error, term()}.
+-spec do_push_blob(string(), binary(), binary(), binary(), binary()) ->
+                      ok | {error, term()}.
 do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     %% Start upload session
-    InitUrl = io_lib:format("~s/v2/~s/blobs/uploads/",
-                           [BaseUrl, binary_to_list(Repo)]),
+    InitUrl = io_lib:format("~s/v2/~s/blobs/uploads/", [BaseUrl, binary_to_list(Repo)]),
     Headers = auth_headers(Token),
-    
+
     case http_post(lists:flatten(InitUrl), Headers, <<>>) of
         {ok, _, ResponseHeaders} ->
             %% Get upload location
@@ -260,13 +267,15 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
                 Location ->
                     %% Complete upload with PUT
                     PutUrl = Location ++ "&digest=" ++ binary_to_list(Digest),
-                    PutHeaders = Headers ++ [
-                        {"Content-Type", "application/octet-stream"},
-                        {"Content-Length", integer_to_list(byte_size(Data))}
-                    ],
+                    PutHeaders =
+                        Headers
+                        ++ [{"Content-Type", "application/octet-stream"},
+                            {"Content-Length", integer_to_list(byte_size(Data))}],
                     case http_put(PutUrl, PutHeaders, Data) of
-                        {ok, _} -> ok;
-                        {error, _} = Err -> Err
+                        {ok, _} ->
+                            ok;
+                        {error, _} = Err ->
+                            Err
                     end
             end;
         {error, _} = Err ->
@@ -274,37 +283,41 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     end.
 
 %% Push manifest
--spec push_manifest(ocibuild:image(), string(), binary(), binary(), binary(),
-                   binary(), non_neg_integer()) -> ok | {error, term()}.
+-spec push_manifest(ocibuild:image(),
+                    string(),
+                    binary(),
+                    binary(),
+                    binary(),
+                    binary(),
+                    non_neg_integer()) ->
+                       ok | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
-    LayerDescriptors = [
-        #{
-            ~"mediaType" => MediaType,
-            ~"digest" => Digest,
-            ~"size" => Size
-        }
-        || #{media_type := MediaType, digest := Digest, size := Size} 
-           <- maps:get(layers, Image, [])
-    ],
-    
-    {ManifestJson, _} = ocibuild_manifest:build(
-        #{
-            ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
-            ~"digest" => ConfigDigest,
-            ~"size" => ConfigSize
-        },
-        LayerDescriptors
-    ),
-    
+    LayerDescriptors =
+        [#{<<"mediaType"/utf8>> => MediaType,
+           <<"digest"/utf8>> => Digest,
+           <<"size"/utf8>> => Size}
+         || #{media_type := MediaType,
+              digest := Digest,
+              size := Size}
+                <- maps:get(layers, Image, [])],
+
+    {ManifestJson, _} =
+        ocibuild_manifest:build(#{<<"mediaType"/utf8>> =>
+                                      <<"application/vnd.oci.image.config.v1+json"/utf8>>,
+                                  <<"digest"/utf8>> => ConfigDigest,
+                                  <<"size"/utf8>> => ConfigSize},
+                                LayerDescriptors),
+
     Url = io_lib:format("~s/v2/~s/manifests/~s",
-                       [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]),
-    Headers = auth_headers(Token) ++ [
-        {"Content-Type", "application/vnd.oci.image.manifest.v1+json"}
-    ],
-    
+                        [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]),
+    Headers =
+        auth_headers(Token) ++ [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
+
     case http_put(lists:flatten(Url), Headers, ManifestJson) of
-        {ok, _} -> ok;
-        {error, _} = Err -> Err
+        {ok, _} ->
+            ok;
+        {error, _} = Err ->
+            Err
     end.
 
 %%%===================================================================
@@ -315,12 +328,16 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
 -spec ensure_started() -> ok.
 ensure_started() ->
     case inets:start() of
-        ok -> ok;
-        {error, {already_started, _}} -> ok
+        ok ->
+            ok;
+        {error, {already_started, _}} ->
+            ok
     end,
     case ssl:start() of
-        ok -> ok;
-        {error, {already_started, _}} -> ok
+        ok ->
+            ok;
+        {error, {already_started, _}} ->
+            ok
     end,
     ok.
 
@@ -328,7 +345,8 @@ ensure_started() ->
 http_get(Url, Headers) ->
     ensure_started(),
     Request = {Url, Headers},
-    case httpc:request(get, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}]) of
+    case httpc:request(get, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}])
+    of
         {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
             {ok, Body};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -337,7 +355,8 @@ http_get(Url, Headers) ->
             {error, Reason}
     end.
 
--spec http_head(string(), [{string(), string()}]) -> {ok, [{string(), string()}]} | {error, term()}.
+-spec http_head(string(), [{string(), string()}]) ->
+                   {ok, [{string(), string()}]} | {error, term()}.
 http_head(Url, Headers) ->
     ensure_started(),
     Request = {Url, Headers},
@@ -350,13 +369,14 @@ http_head(Url, Headers) ->
             {error, Reason}
     end.
 
--spec http_post(string(), [{string(), string()}], binary()) -> 
-    {ok, binary(), [{string(), string()}]} | {error, term()}.
+-spec http_post(string(), [{string(), string()}], binary()) ->
+                   {ok, binary(), [{string(), string()}]} | {error, term()}.
 http_post(Url, Headers, Body) ->
     ensure_started(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     Request = {Url, Headers, ContentType, Body},
-    case httpc:request(post, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}]) of
+    case httpc:request(post, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}])
+    of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -365,12 +385,14 @@ http_post(Url, Headers, Body) ->
             {error, Reason}
     end.
 
--spec http_put(string(), [{string(), string()}], binary()) -> {ok, binary()} | {error, term()}.
+-spec http_put(string(), [{string(), string()}], binary()) ->
+                  {ok, binary()} | {error, term()}.
 http_put(Url, Headers, Body) ->
     ensure_started(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     Request = {Url, Headers, ContentType, Body},
-    case httpc:request(put, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}]) of
+    case httpc:request(put, Request, [{timeout, ?DEFAULT_TIMEOUT}], [{body_format, binary}])
+    of
         {ok, {{_, Status, _}, _, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody};
         {ok, {{_, Status, Reason}, _, _}} ->
