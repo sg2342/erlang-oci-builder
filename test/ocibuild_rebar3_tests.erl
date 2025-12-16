@@ -49,8 +49,10 @@ collect_empty_dir_test() ->
 
 build_scratch_image_test() ->
     Files =
-        [{~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755},
-         {~"/app/lib/myapp.beam", ~"beam_data", 8#644}],
+        [
+            {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755},
+            {~"/app/lib/myapp.beam", ~"beam_data", 8#644}
+        ],
 
     {ok, Image} = build_test_image(~"scratch", Files, "myapp"),
 
@@ -61,8 +63,10 @@ build_scratch_image_test() ->
     %% Verify config
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
-    ?assertEqual([~"/app/bin/myapp", ~"foreground"],
-                 maps:get(~"Entrypoint", InnerConfig)),
+    ?assertEqual(
+        [~"/app/bin/myapp", ~"foreground"],
+        maps:get(~"Entrypoint", InnerConfig)
+    ),
     ?assertEqual(~"/app", maps:get(~"WorkingDir", InnerConfig)).
 
 build_with_env_test() ->
@@ -84,13 +88,15 @@ build_with_exposed_ports_test() ->
     Files = [{~"/app/test", ~"data", 8#644}],
 
     {ok, Image} =
-        build_test_image_with_opts(~"scratch",
-                                   Files,
-                                   "myapp",
-                                   ~"/app",
-                                   #{},
-                                   [8080, 443],
-                                   #{}),
+        build_test_image_with_opts(
+            ~"scratch",
+            Files,
+            "myapp",
+            ~"/app",
+            #{},
+            [8080, 443],
+            #{}
+        ),
 
     Config = maps:get(config, Image),
     InnerConfig = maps:get(~"config", Config),
@@ -177,16 +183,18 @@ collect_release_files(ReleasePath) ->
 collect_files_recursive(BasePath, CurrentPath) ->
     case file:list_dir(CurrentPath) of
         {ok, Entries} ->
-            lists:flatmap(fun(Entry) ->
-                             FullPath = filename:join(CurrentPath, Entry),
-                             case filelib:is_dir(FullPath) of
-                                 true ->
-                                     collect_files_recursive(BasePath, FullPath);
-                                 false ->
-                                     [collect_single_file(BasePath, FullPath)]
-                             end
-                          end,
-                          Entries);
+            lists:flatmap(
+                fun(Entry) ->
+                    FullPath = filename:join(CurrentPath, Entry),
+                    case filelib:is_dir(FullPath) of
+                        true ->
+                            collect_files_recursive(BasePath, FullPath);
+                        false ->
+                            [collect_single_file(BasePath, FullPath)]
+                    end
+                end,
+                Entries
+            );
         {error, Reason} ->
             throw({file_error, CurrentPath, Reason})
     end.
@@ -233,13 +241,15 @@ get_file_mode(FilePath) ->
 build_test_image(BaseImage, Files, ReleaseName) ->
     build_test_image_with_opts(BaseImage, Files, ReleaseName, <<"/app">>, #{}, [], #{}).
 
-build_test_image_with_opts(BaseImage,
-                           Files,
-                           ReleaseName,
-                           Workdir,
-                           EnvMap,
-                           ExposePorts,
-                           Labels) ->
+build_test_image_with_opts(
+    BaseImage,
+    Files,
+    ReleaseName,
+    Workdir,
+    EnvMap,
+    ExposePorts,
+    Labels
+) ->
     Image0 =
         case BaseImage of
             ~"scratch" ->
@@ -266,9 +276,11 @@ build_test_image_with_opts(BaseImage,
         lists:foldl(fun(Port, AccImg) -> ocibuild:expose(AccImg, Port) end, Image4, ExposePorts),
 
     Image6 =
-        maps:fold(fun(Key, Value, AccImg) -> ocibuild:label(AccImg, Key, Value) end,
-                  Image5,
-                  Labels),
+        maps:fold(
+            fun(Key, Value, AccImg) -> ocibuild:label(AccImg, Key, Value) end,
+            Image5,
+            Labels
+        ),
 
     {ok, Image6}.
 
@@ -325,7 +337,8 @@ make_temp_dir(Prefix) ->
     TmpDir = filename:join(temp_dir(), DirName),
     ok =
         filelib:ensure_dir(
-            filename:join(TmpDir, "placeholder")),
+            filename:join(TmpDir, "placeholder")
+        ),
     case file:make_dir(TmpDir) of
         ok ->
             TmpDir;
@@ -338,16 +351,18 @@ cleanup_temp_dir(Dir) ->
     case filelib:is_dir(Dir) of
         true ->
             {ok, Files} = file:list_dir(Dir),
-            lists:foreach(fun(File) ->
-                             Path = filename:join(Dir, File),
-                             case filelib:is_dir(Path) of
-                                 true ->
-                                     cleanup_temp_dir(Path);
-                                 false ->
-                                     file:delete(Path)
-                             end
-                          end,
-                          Files),
+            lists:foreach(
+                fun(File) ->
+                    Path = filename:join(Dir, File),
+                    case filelib:is_dir(Path) of
+                        true ->
+                            cleanup_temp_dir(Path);
+                        false ->
+                            file:delete(Path)
+                    end
+                end,
+                Files
+            ),
             file:del_dir(Dir);
         false ->
             ok
@@ -367,13 +382,16 @@ create_mock_release() ->
 
     ok =
         filelib:ensure_dir(
-            filename:join(BinDir, "placeholder")),
+            filename:join(BinDir, "placeholder")
+        ),
     ok =
         filelib:ensure_dir(
-            filename:join(LibDir, "placeholder")),
+            filename:join(LibDir, "placeholder")
+        ),
     ok =
         filelib:ensure_dir(
-            filename:join(RelDir, "placeholder")),
+            filename:join(RelDir, "placeholder")
+        ),
 
     %% Create bin script (executable)
     BinPath = filename:join(BinDir, "myapp"),

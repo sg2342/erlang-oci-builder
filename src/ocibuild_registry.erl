@@ -9,16 +9,21 @@ container images to registries like Docker Hub, GHCR, etc.
 See: https://github.com/opencontainers/distribution-spec
 """.
 
--export([pull_manifest/3, pull_manifest/4, pull_blob/3, pull_blob/4, push/5,
-         check_blob_exists/4]).
+-export([
+    pull_manifest/3, pull_manifest/4,
+    pull_blob/3, pull_blob/4,
+    push/5,
+    check_blob_exists/4
+]).
 
 -define(DEFAULT_TIMEOUT, 30000).
 %% Registry URL mappings
--define(REGISTRY_URLS,
-        #{~"docker.io" => "https://registry-1.docker.io",
-          ~"ghcr.io" => "https://ghcr.io",
-          ~"gcr.io" => "https://gcr.io",
-          ~"quay.io" => "https://quay.io"}).
+-define(REGISTRY_URLS, #{
+    ~"docker.io" => "https://registry-1.docker.io",
+    ~"ghcr.io" => "https://ghcr.io",
+    ~"gcr.io" => "https://gcr.io",
+    ~"quay.io" => "https://quay.io"
+}).
 
 %%%===================================================================
 %%% API
@@ -26,13 +31,13 @@ See: https://github.com/opencontainers/distribution-spec
 
 -doc "Pull a manifest and config from a registry.".
 -spec pull_manifest(binary(), binary(), binary()) ->
-                       {ok, Manifest :: map(), Config :: map()} | {error, term()}.
+    {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref) ->
     pull_manifest(Registry, Repo, Ref, #{}).
 
 -doc "Pull a manifest and config from a registry with authentication.".
 -spec pull_manifest(binary(), binary(), binary(), map()) ->
-                       {ok, Manifest :: map(), Config :: map()} | {error, term()}.
+    {ok, Manifest :: map(), Config :: map()} | {error, term()}.
 pull_manifest(Registry, Repo, Ref, Auth) ->
     BaseUrl = registry_url(Registry),
 
@@ -41,14 +46,18 @@ pull_manifest(Registry, Repo, Ref, Auth) ->
         {ok, Token} ->
             %% Fetch manifest (accept both single manifests and manifest lists)
             ManifestUrl =
-                io_lib:format("~s/v2/~s/manifests/~s",
-                              [BaseUrl, binary_to_list(Repo), binary_to_list(Ref)]),
+                io_lib:format(
+                    "~s/v2/~s/manifests/~s",
+                    [BaseUrl, binary_to_list(Repo), binary_to_list(Ref)]
+                ),
             Headers =
-                auth_headers(Token)
-                ++ [{"Accept", "application/vnd.oci.image.index.v1+json"},
-                    {"Accept", "application/vnd.docker.distribution.manifest.list.v2+json"},
-                    {"Accept", "application/vnd.oci.image.manifest.v1+json"},
-                    {"Accept", "application/vnd.docker.distribution.manifest.v2+json"}],
+                auth_headers(Token) ++
+                    [
+                        {"Accept", "application/vnd.oci.image.index.v1+json"},
+                        {"Accept", "application/vnd.docker.distribution.manifest.list.v2+json"},
+                        {"Accept", "application/vnd.oci.image.manifest.v1+json"},
+                        {"Accept", "application/vnd.docker.distribution.manifest.v2+json"}
+                    ],
 
             case http_get(lists:flatten(ManifestUrl), Headers) of
                 {ok, ManifestJson} ->
@@ -94,8 +103,10 @@ pull_blob(Registry, Repo, Digest, Auth) ->
 
     case get_auth_token(Registry, Repo, Auth) of
         {ok, Token} ->
-            Url = io_lib:format("~s/v2/~s/blobs/~s",
-                                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
+            Url = io_lib:format(
+                "~s/v2/~s/blobs/~s",
+                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+            ),
             Headers = auth_headers(Token),
             http_get(lists:flatten(Url), Headers);
         {error, _} = Err ->
@@ -109,8 +120,10 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
 
     case get_auth_token(Registry, Repo, Auth) of
         {ok, Token} ->
-            Url = io_lib:format("~s/v2/~s/blobs/~s",
-                                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
+            Url = io_lib:format(
+                "~s/v2/~s/blobs/~s",
+                [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+            ),
             Headers = auth_headers(Token),
             case http_head(lists:flatten(Url), Headers) of
                 {ok, _} ->
@@ -136,13 +149,15 @@ push(Image, Registry, Repo, Tag, Auth) ->
                     case push_config(Image, BaseUrl, Repo, Token) of
                         {ok, ConfigDigest, ConfigSize} ->
                             %% Push manifest
-                            push_manifest(Image,
-                                          BaseUrl,
-                                          Repo,
-                                          Tag,
-                                          Token,
-                                          ConfigDigest,
-                                          ConfigSize);
+                            push_manifest(
+                                Image,
+                                BaseUrl,
+                                Repo,
+                                Tag,
+                                Token,
+                                ConfigDigest,
+                                ConfigSize
+                            );
                         {error, _} = Err ->
                             Err
                     end;
@@ -188,8 +203,11 @@ select_platform_manifest(#{~"manifests" := Manifests}) ->
     {TargetOs, TargetArch} = get_target_platform(),
 
     %% Filter out attestation manifests and find matching platform
-    CandidateManifests = [M || M <- Manifests,
-                               not is_attestation_manifest(M)],
+    CandidateManifests = [
+        M
+     || M <- Manifests,
+        not is_attestation_manifest(M)
+    ],
 
     case find_platform_manifest(CandidateManifests, TargetOs, TargetArch) of
         {ok, _} = Result ->
@@ -217,11 +235,14 @@ is_attestation_manifest(_) ->
 
 %% Find a manifest matching the target platform
 -spec find_platform_manifest([map()], binary(), binary()) ->
-          {ok, binary()} | {error, no_matching_platform}.
+    {ok, binary()} | {error, no_matching_platform}.
 find_platform_manifest([], _TargetOs, _TargetArch) ->
     {error, no_matching_platform};
-find_platform_manifest([#{~"platform" := Platform, ~"digest" := Digest} | Rest],
-                       TargetOs, TargetArch) ->
+find_platform_manifest(
+    [#{~"platform" := Platform, ~"digest" := Digest} | Rest],
+    TargetOs,
+    TargetArch
+) ->
     Os = maps:get(~"os", Platform, <<>>),
     Arch = maps:get(~"architecture", Platform, <<>>),
     case {Os, Arch} of
@@ -236,13 +257,15 @@ find_platform_manifest([_ | Rest], TargetOs, TargetArch) ->
 %% Get the target platform (OS and architecture)
 -spec get_target_platform() -> {binary(), binary()}.
 get_target_platform() ->
-    Os = ~"linux",  % Container images are always for Linux
-    Arch = case erlang:system_info(system_architecture) of
-               Arch0 when is_list(Arch0) ->
-                   normalize_arch(list_to_binary(Arch0));
-               _ ->
-                   ~"amd64"
-           end,
+    % Container images are always for Linux
+    Os = ~"linux",
+    Arch =
+        case erlang:system_info(system_architecture) of
+            Arch0 when is_list(Arch0) ->
+                normalize_arch(list_to_binary(Arch0));
+            _ ->
+                ~"amd64"
+        end,
     {Os, Arch}.
 
 %% Normalize architecture name to OCI format
@@ -254,12 +277,13 @@ normalize_arch(Arch) ->
         <<"aarch64", _/binary>> -> ~"arm64";
         <<"arm64", _/binary>> -> ~"arm64";
         <<"arm", _/binary>> -> ~"arm";
-        _ -> ~"amd64"  % Default fallback
+        % Default fallback
+        _ -> ~"amd64"
     end.
 
 %% Get authentication token
 -spec get_auth_token(binary(), binary(), map()) ->
-                        {ok, binary() | none} | {error, term()}.
+    {ok, binary() | none} | {error, term()}.
 get_auth_token(~"docker.io", Repo, Auth) ->
     %% Docker Hub uses token authentication
     docker_hub_auth(Repo, Auth);
@@ -267,7 +291,9 @@ get_auth_token(_Registry, _Repo, #{token := Token}) ->
     {ok, Token};
 get_auth_token(_Registry, _Repo, #{username := User, password := Pass}) ->
     %% Basic auth - encode as base64
-    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>), %% Keep interpolation
+
+    %% Keep interpolation
+    Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
     {ok, {basic, Encoded}};
 get_auth_token(_Registry, _Repo, #{}) ->
     {ok, none}.
@@ -277,8 +303,9 @@ get_auth_token(_Registry, _Repo, #{}) ->
 docker_hub_auth(Repo, Auth) ->
     %% Docker Hub requires getting a token from auth.docker.io
     Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
-    Url = "https://auth.docker.io/token?service=registry.docker.io&scope="
-          ++ uri_string:quote(Scope),
+    Url =
+        "https://auth.docker.io/token?service=registry.docker.io&scope=" ++
+            uri_string:quote(Scope),
 
     Headers =
         case Auth of
@@ -314,17 +341,20 @@ auth_headers(Token) when is_binary(Token) ->
 %% Push all layers
 -spec push_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
 push_layers(#{layers := Layers}, BaseUrl, Repo, Token) ->
-    lists:foldl(fun (#{digest := Digest, data := Data}, ok) ->
-                        push_blob(BaseUrl, Repo, Digest, Data, Token);
-                    (_, {error, _} = Err) ->
-                        Err
-                end,
-                ok,
-                Layers).
+    lists:foldl(
+        fun
+            (#{digest := Digest, data := Data}, ok) ->
+                push_blob(BaseUrl, Repo, Digest, Data, Token);
+            (_, {error, _} = Err) ->
+                Err
+        end,
+        ok,
+        Layers
+    ).
 
 %% Push config and return its digest and size
 -spec push_config(ocibuild:image(), string(), binary(), binary()) ->
-                     {ok, binary(), non_neg_integer()} | {error, term()}.
+    {ok, binary(), non_neg_integer()} | {error, term()}.
 push_config(#{config := Config}, BaseUrl, Repo, Token) ->
     ConfigJson = ocibuild_json:encode(Config),
     Digest = ocibuild_digest:sha256(ConfigJson),
@@ -340,8 +370,10 @@ push_config(#{config := Config}, BaseUrl, Repo, Token) ->
 push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     %% Check if blob already exists
     CheckUrl =
-        io_lib:format("~s/v2/~s/blobs/~s",
-                      [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]),
+        io_lib:format(
+            "~s/v2/~s/blobs/~s",
+            [BaseUrl, binary_to_list(Repo), binary_to_list(Digest)]
+        ),
     Headers = auth_headers(Token),
 
     case http_head(lists:flatten(CheckUrl), Headers) of
@@ -355,7 +387,7 @@ push_blob(BaseUrl, Repo, Digest, Data, Token) ->
 
 %% Actually upload a blob
 -spec do_push_blob(string(), binary(), binary(), binary(), binary()) ->
-                      ok | {error, term()}.
+    ok | {error, term()}.
 do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     %% Start upload session
     InitUrl = io_lib:format("~s/v2/~s/blobs/uploads/", [BaseUrl, binary_to_list(Repo)]),
@@ -371,9 +403,11 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
                     %% Complete upload with PUT
                     PutUrl = Location ++ "&digest=" ++ binary_to_list(Digest),
                     PutHeaders =
-                        Headers
-                        ++ [{"Content-Type", "application/octet-stream"},
-                            {"Content-Length", integer_to_list(byte_size(Data))}],
+                        Headers ++
+                            [
+                                {"Content-Type", "application/octet-stream"},
+                                {"Content-Length", integer_to_list(byte_size(Data))}
+                            ],
                     case http_put(PutUrl, PutHeaders, Data) of
                         {ok, _} ->
                             ok;
@@ -386,33 +420,47 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
     end.
 
 %% Push manifest
--spec push_manifest(ocibuild:image(),
-                    string(),
-                    binary(),
-                    binary(),
-                    binary(),
-                    binary(),
-                    non_neg_integer()) ->
-                       ok | {error, term()}.
+-spec push_manifest(
+    ocibuild:image(),
+    string(),
+    binary(),
+    binary(),
+    binary(),
+    binary(),
+    non_neg_integer()
+) ->
+    ok | {error, term()}.
 push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
     LayerDescriptors =
-        [#{~"mediaType" => MediaType,
-           ~"digest" => Digest,
-           ~"size" => Size}
-         || #{media_type := MediaType,
-              digest := Digest,
-              size := Size}
-                <- maps:get(layers, Image, [])],
+        [
+            #{
+                ~"mediaType" => MediaType,
+                ~"digest" => Digest,
+                ~"size" => Size
+            }
+         || #{
+                media_type := MediaType,
+                digest := Digest,
+                size := Size
+            } <-
+                maps:get(layers, Image, [])
+        ],
 
     {ManifestJson, _} =
-        ocibuild_manifest:build(#{~"mediaType" =>
-                                      ~"application/vnd.oci.image.config.v1+json",
-                                  ~"digest" => ConfigDigest,
-                                  ~"size" => ConfigSize},
-                                LayerDescriptors),
+        ocibuild_manifest:build(
+            #{
+                ~"mediaType" =>
+                    ~"application/vnd.oci.image.config.v1+json",
+                ~"digest" => ConfigDigest,
+                ~"size" => ConfigSize
+            },
+            LayerDescriptors
+        ),
 
-    Url = io_lib:format("~s/v2/~s/manifests/~s",
-                        [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]),
+    Url = io_lib:format(
+        "~s/v2/~s/manifests/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(Tag)]
+    ),
     Headers =
         auth_headers(Token) ++ [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
 
@@ -449,7 +497,7 @@ http_get(Url, Headers) ->
     http_get(Url, Headers, 5).
 
 -spec http_get(string(), [{string(), string()}], non_neg_integer()) ->
-          {ok, binary()} | {error, term()}.
+    {ok, binary()} | {error, term()}.
 http_get(_Url, _Headers, 0) ->
     {error, too_many_redirects};
 http_get(Url, Headers, RedirectsLeft) ->
@@ -463,11 +511,13 @@ http_get(Url, Headers, RedirectsLeft) ->
     case httpc:request(get, Request, HttpOpts, Opts) of
         {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
             {ok, Body};
-        {ok, {{_, Status, _}, RespHeaders, _}} when Status =:= 301;
-                                                     Status =:= 302;
-                                                     Status =:= 303;
-                                                     Status =:= 307;
-                                                     Status =:= 308 ->
+        {ok, {{_, Status, _}, RespHeaders, _}} when
+            Status =:= 301;
+            Status =:= 302;
+            Status =:= 303;
+            Status =:= 307;
+            Status =:= 308
+        ->
             %% Handle redirect - strip Authorization header for external redirects
             case get_redirect_location(RespHeaders) of
                 {ok, RedirectUrl} ->
@@ -496,11 +546,14 @@ get_redirect_location([{Key, Value} | Rest]) ->
 %% Strip authorization headers for redirects to external hosts
 -spec strip_auth_headers([{string(), string()}]) -> [{string(), string()}].
 strip_auth_headers(Headers) ->
-    [{K, V} || {K, V} <- Headers,
-               string:lowercase(K) =/= "authorization"].
+    [
+        {K, V}
+     || {K, V} <- Headers,
+        string:lowercase(K) =/= "authorization"
+    ].
 
 -spec http_head(string(), [{string(), string()}]) ->
-                   {ok, [{string(), string()}]} | {error, term()}.
+    {ok, [{string(), string()}]} | {error, term()}.
 http_head(Url, Headers) ->
     ensure_started(),
     AllHeaders = Headers ++ [{"Connection", "close"}],
@@ -517,7 +570,7 @@ http_head(Url, Headers) ->
     end.
 
 -spec http_post(string(), [{string(), string()}], binary()) ->
-                   {ok, binary(), [{string(), string()}]} | {error, term()}.
+    {ok, binary(), [{string(), string()}]} | {error, term()}.
 http_post(Url, Headers, Body) ->
     ensure_started(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
@@ -535,7 +588,7 @@ http_post(Url, Headers, Body) ->
     end.
 
 -spec http_put(string(), [{string(), string()}], binary()) ->
-                  {ok, binary()} | {error, term()}.
+    {ok, binary()} | {error, term()}.
 http_put(Url, Headers, Body) ->
     ensure_started(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),

@@ -13,14 +13,18 @@ See: https://github.com/opencontainers/image-spec/blob/main/manifest.md
 -export([media_type/0, config_media_type/0, layer_media_type/0, layer_media_type/1]).
 
 -type descriptor() ::
-    #{mediaType := binary(),
-      digest := binary(),
-      size := non_neg_integer()}.
+    #{
+        mediaType := binary(),
+        digest := binary(),
+        size := non_neg_integer()
+    }.
 -type manifest() ::
-    #{schemaVersion := integer(),
-      mediaType := binary(),
-      config := descriptor(),
-      layers := [descriptor()]}.
+    #{
+        schemaVersion := integer(),
+        mediaType := binary(),
+        config := descriptor(),
+        layers := [descriptor()]
+    }.
 
 -export_type([manifest/0, descriptor/0]).
 
@@ -28,10 +32,12 @@ See: https://github.com/opencontainers/image-spec/blob/main/manifest.md
 -spec build(descriptor(), [descriptor()]) -> {binary(), binary()}.
 build(ConfigDescriptor, LayerDescriptors) ->
     Manifest =
-        #{~"schemaVersion" => 2,
-          ~"mediaType" => media_type(),
-          ~"config" => ConfigDescriptor,
-          ~"layers" => LayerDescriptors},
+        #{
+            ~"schemaVersion" => 2,
+            ~"mediaType" => media_type(),
+            ~"config" => ConfigDescriptor,
+            ~"layers" => LayerDescriptors
+        },
     Json = ocibuild_json:encode(Manifest),
     Digest = ocibuild_digest:sha256(Json),
     {Json, Digest}.

@@ -38,30 +38,37 @@ export_directory(Image, Path) ->
         BlobsDir = filename:join([Path, "blobs", "sha256"]),
         ok =
             filelib:ensure_dir(
-                filename:join(BlobsDir, "dummy")),
+                filename:join(BlobsDir, "dummy")
+            ),
 
         %% Build all the components
         {ConfigJson, ConfigDigest} = build_config_blob(Image),
         LayerDescriptors = build_layer_descriptors(Image),
         {ManifestJson, ManifestDigest} =
-            ocibuild_manifest:build(#{~"mediaType" =>
-                                          ~"application/vnd.oci.image.config.v1+json",
-                                      ~"digest" => ConfigDigest,
-                                      ~"size" => byte_size(ConfigJson)},
-                                    LayerDescriptors),
+            ocibuild_manifest:build(
+                #{
+                    ~"mediaType" =>
+                        ~"application/vnd.oci.image.config.v1+json",
+                    ~"digest" => ConfigDigest,
+                    ~"size" => byte_size(ConfigJson)
+                },
+                LayerDescriptors
+            ),
 
         %% Write oci-layout
         OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
         ok =
             file:write_file(
-                filename:join(Path, "oci-layout"), OciLayout),
+                filename:join(Path, "oci-layout"), OciLayout
+            ),
 
         %% Write index.json
         Index = build_index(ManifestDigest, byte_size(ManifestJson), ~"latest"),
         IndexJson = ocibuild_json:encode(Index),
         ok =
             file:write_file(
-                filename:join(Path, "index.json"), IndexJson),
+                filename:join(Path, "index.json"), IndexJson
+            ),
 
         %% Write config blob
         ConfigPath = filename:join(BlobsDir, ocibuild_digest:encoded(ConfigDigest)),
@@ -72,11 +79,13 @@ export_directory(Image, Path) ->
         ok = file:write_file(ManifestPath, ManifestJson),
 
         %% Write layer blobs
-        lists:foreach(fun(#{digest := Digest, data := Data}) ->
-                         LayerPath = filename:join(BlobsDir, ocibuild_digest:encoded(Digest)),
-                         ok = file:write_file(LayerPath, Data)
-                      end,
-                      maps:get(layers, Image, [])),
+        lists:foreach(
+            fun(#{digest := Digest, data := Data}) ->
+                LayerPath = filename:join(BlobsDir, ocibuild_digest:encoded(Digest)),
+                ok = file:write_file(LayerPath, Data)
+            end,
+            maps:get(layers, Image, [])
+        ),
 
         ok
     catch
@@ -111,11 +120,15 @@ save_tarball(Image, Path, Opts) ->
         {ConfigJson, ConfigDigest} = build_config_blob(Image),
         LayerDescriptors = build_layer_descriptors(Image),
         {ManifestJson, ManifestDigest} =
-            ocibuild_manifest:build(#{~"mediaType" =>
-                                          ~"application/vnd.oci.image.config.v1+json",
-                                      ~"digest" => ConfigDigest,
-                                      ~"size" => byte_size(ConfigJson)},
-                                    LayerDescriptors),
+            ocibuild_manifest:build(
+                #{
+                    ~"mediaType" =>
+                        ~"application/vnd.oci.image.config.v1+json",
+                    ~"digest" => ConfigDigest,
+                    ~"size" => byte_size(ConfigJson)
+                },
+                LayerDescriptors
+            ),
 
         %% Build oci-layout
         OciLayout = ocibuild_json:encode(#{~"imageLayoutVersion" => ~"1.0.0"}),
@@ -129,13 +142,17 @@ save_tarball(Image, Path, Opts) ->
         BaseLayerFiles = build_base_layers(Image),
 
         Files =
-            [{~"oci-layout", OciLayout, 8#644},
-             {~"index.json", IndexJson, 8#644},
-             {blob_path(ConfigDigest), ConfigJson, 8#644},
-             {blob_path(ManifestDigest), ManifestJson, 8#644}]
-            ++ [{blob_path(Digest), Data, 8#644}
-                || #{digest := Digest, data := Data} <- maps:get(layers, Image, [])]
-            ++ BaseLayerFiles,
+            [
+                {~"oci-layout", OciLayout, 8#644},
+                {~"index.json", IndexJson, 8#644},
+                {blob_path(ConfigDigest), ConfigJson, 8#644},
+                {blob_path(ManifestDigest), ManifestJson, 8#644}
+            ] ++
+                [
+                    {blob_path(Digest), Data, 8#644}
+                 || #{digest := Digest, data := Data} <- maps:get(layers, Image, [])
+                ] ++
+                BaseLayerFiles,
 
         %% Create the tarball
         TarData = ocibuild_tar:create(Files),
@@ -153,8 +170,10 @@ save_tarball(Image, Path, Opts) ->
 
 %% Download base image layers from registry
 -spec build_base_layers(ocibuild:image()) -> [{binary(), binary(), integer()}].
-build_base_layers(#{base := {Registry, Repo, _Tag},
-                    base_manifest := #{~"layers" := ManifestLayers}}) ->
+build_base_layers(#{
+    base := {Registry, Repo, _Tag},
+    base_manifest := #{~"layers" := ManifestLayers}
+}) ->
     lists:foldl(
         fun(#{~"digest" := Digest}, Acc) ->
             case ocibuild_registry:pull_blob(Registry, Repo, Digest) of
@@ -162,8 +181,11 @@ build_base_layers(#{base := {Registry, Repo, _Tag},
                     %% OCI format keeps layers compressed with digest as path
                     Acc ++ [{blob_path(Digest), CompressedData, 8#644}];
                 {error, Reason} ->
-                    io:format(standard_error, "Warning: Could not fetch base layer ~s: ~p~n",
-                              [Digest, Reason]),
+                    io:format(
+                        standard_error,
+                        "Warning: Could not fetch base layer ~s: ~p~n",
+                        [Digest, Reason]
+                    ),
                     Acc
             end
         end,
@@ -186,36 +208,54 @@ build_layer_descriptors(#{base_manifest := BaseManifest, layers := NewLayers}) -
     %% Include base image layers + new layers
     BaseLayers = maps:get(~"layers", BaseManifest, []),
     NewDescriptors =
-        [#{~"mediaType" => MediaType,
-           ~"digest" => Digest,
-           ~"size" => Size}
-         || #{media_type := MediaType,
-              digest := Digest,
-              size := Size}
-                <- NewLayers],
+        [
+            #{
+                ~"mediaType" => MediaType,
+                ~"digest" => Digest,
+                ~"size" => Size
+            }
+         || #{
+                media_type := MediaType,
+                digest := Digest,
+                size := Size
+            } <-
+                NewLayers
+        ],
     BaseLayers ++ NewDescriptors;
 build_layer_descriptors(#{layers := NewLayers}) ->
     %% No base image, just new layers
-    [#{~"mediaType" => MediaType,
-       ~"digest" => Digest,
-       ~"size" => Size}
-     || #{media_type := MediaType,
-          digest := Digest,
-          size := Size}
-            <- NewLayers].
+    [
+        #{
+            ~"mediaType" => MediaType,
+            ~"digest" => Digest,
+            ~"size" => Size
+        }
+     || #{
+            media_type := MediaType,
+            digest := Digest,
+            size := Size
+        } <-
+            NewLayers
+    ].
 
 %% Build the index.json structure with tag annotation
 -spec build_index(binary(), non_neg_integer(), binary()) -> map().
 build_index(ManifestDigest, ManifestSize, Tag) ->
-    #{~"schemaVersion" => 2,
-      ~"manifests" =>
-          [#{~"mediaType" => ~"application/vnd.oci.image.manifest.v1+json",
-             ~"digest" => ManifestDigest,
-             ~"size" => ManifestSize,
-             ~"annotations" => #{
-                 %% This annotation tells podman/skopeo what to name the image
-                 ~"org.opencontainers.image.ref.name" => Tag
-             }}]}.
+    #{
+        ~"schemaVersion" => 2,
+        ~"manifests" =>
+            [
+                #{
+                    ~"mediaType" => ~"application/vnd.oci.image.manifest.v1+json",
+                    ~"digest" => ManifestDigest,
+                    ~"size" => ManifestSize,
+                    ~"annotations" => #{
+                        %% This annotation tells podman/skopeo what to name the image
+                        ~"org.opencontainers.image.ref.name" => Tag
+                    }
+                }
+            ]
+    }.
 
 %% Convert digest to blob path
 -spec blob_path(binary()) -> binary().

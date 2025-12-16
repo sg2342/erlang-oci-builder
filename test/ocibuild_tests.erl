@@ -44,8 +44,10 @@ json_encode_object_test() ->
     ?assertEqual(#{~"a" => 1, ~"b" => 2}, Decoded).
 
 json_decode_test() ->
-    ?assertEqual(#{~"key" => ~"value"},
-                 ocibuild_json:decode(~"{\"key\":\"value\"}")).
+    ?assertEqual(
+        #{~"key" => ~"value"},
+        ocibuild_json:decode(~"{\"key\":\"value\"}")
+    ).
 
 %%%===================================================================
 %%% Tar tests
@@ -86,8 +88,10 @@ layer_create_test() ->
     ?assertMatch(<<"sha256:", _/binary>>, Digest),
 
     %% Media type should be correct
-    ?assertEqual(~"application/vnd.oci.image.layer.v1.tar+gzip",
-                 maps:get(media_type, Layer)).
+    ?assertEqual(
+        ~"application/vnd.oci.image.layer.v1.tar+gzip",
+        maps:get(media_type, Layer)
+    ).
 
 %%%===================================================================
 %%% Image building tests
@@ -137,12 +141,21 @@ export_directory_test() ->
         ok = ocibuild:export(Image2, TmpDir),
 
         %% Check required files exist
-        ?assert(filelib:is_file(
-                    filename:join(TmpDir, "oci-layout"))),
-        ?assert(filelib:is_file(
-                    filename:join(TmpDir, "index.json"))),
-        ?assert(filelib:is_dir(
-                    filename:join([TmpDir, "blobs", "sha256"])))
+        ?assert(
+            filelib:is_file(
+                filename:join(TmpDir, "oci-layout")
+            )
+        ),
+        ?assert(
+            filelib:is_file(
+                filename:join(TmpDir, "index.json")
+            )
+        ),
+        ?assert(
+            filelib:is_dir(
+                filename:join([TmpDir, "blobs", "sha256"])
+            )
+        )
     after
         cleanup_temp_dir(TmpDir)
     end.
@@ -193,7 +206,8 @@ make_temp_dir(Prefix) ->
     TmpDir = filename:join(temp_dir(), DirName),
     ok =
         filelib:ensure_dir(
-            filename:join(TmpDir, "placeholder")),
+            filename:join(TmpDir, "placeholder")
+        ),
     case file:make_dir(TmpDir) of
         ok ->
             TmpDir;
@@ -212,16 +226,18 @@ cleanup_temp_dir(Dir) ->
     case filelib:is_dir(Dir) of
         true ->
             {ok, Files} = file:list_dir(Dir),
-            lists:foreach(fun(File) ->
-                             Path = filename:join(Dir, File),
-                             case filelib:is_dir(Path) of
-                                 true ->
-                                     cleanup_temp_dir(Path);
-                                 false ->
-                                     file:delete(Path)
-                             end
-                          end,
-                          Files),
+            lists:foreach(
+                fun(File) ->
+                    Path = filename:join(Dir, File),
+                    case filelib:is_dir(Path) of
+                        true ->
+                            cleanup_temp_dir(Path);
+                        false ->
+                            file:delete(Path)
+                    end
+                end,
+                Files
+            ),
             file:del_dir(Dir);
         false ->
             ok

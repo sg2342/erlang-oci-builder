@@ -11,11 +11,13 @@ An OCI layer is a gzip-compressed tar archive with two digests:
 -export([create/1]).
 
 -type layer() ::
-    #{media_type := binary(),
-      digest := binary(),
-      diff_id := binary(),
-      size := non_neg_integer(),
-      data := binary()}.
+    #{
+        media_type := binary(),
+        digest := binary(),
+        diff_id := binary(),
+        size := non_neg_integer(),
+        data := binary()
+    }.
 
 -export_type([layer/0]).
 
@@ -51,8 +53,10 @@ create(Files) ->
     %% Calculate digest from compressed data
     Digest = ocibuild_digest:sha256(Compressed),
 
-    #{media_type => ocibuild_manifest:layer_media_type(),
-      digest => Digest,
-      diff_id => DiffId,
-      size => byte_size(Compressed),
-      data => Compressed}.
+    #{
+        media_type => ocibuild_manifest:layer_media_type(),
+        digest => Digest,
+        diff_id => DiffId,
+        size => byte_size(Compressed),
+        data => Compressed
+    }.

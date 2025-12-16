@@ -46,8 +46,11 @@ The TAR format consists of 512-byte blocks:
 -define(PREFIX_OFFSET, 345).
 -define(PREFIX_SIZE, 155).
 %% Type flags
--define(FILETYPE, $0).     %% Regular file
--define(DIRTYPE, $5).      %% Directory
+
+%% Regular file
+-define(FILETYPE, $0).
+%% Directory
+-define(DIRTYPE, $5).
 
 -doc """
 Create a TAR archive in memory.
@@ -78,7 +81,7 @@ create(Files) ->
 
 -doc "Create a gzip-compressed TAR archive in memory.".
 -spec create_compressed([{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
-                           binary().
+    binary().
 create_compressed(Files) ->
     Tar = create(Files),
     zlib:gzip(Tar).
@@ -91,13 +94,15 @@ create_compressed(Files) ->
 -spec collect_directories([{binary(), binary(), integer()}]) -> [binary()].
 collect_directories(Files) ->
     AllDirs =
-        lists:foldl(fun({Path, _, _}, Acc) ->
-                       %% Normalize path and get all parent directories
-                       NormPath = normalize_path(Path),
-                       parent_dirs(NormPath, Acc)
-                    end,
-                    sets:new([{version, 2}]),
-                    Files),
+        lists:foldl(
+            fun({Path, _, _}, Acc) ->
+                %% Normalize path and get all parent directories
+                NormPath = normalize_path(Path),
+                parent_dirs(NormPath, Acc)
+            end,
+            sets:new([{version, 2}]),
+            Files
+        ),
     sets:to_list(AllDirs).
 
 %% Get all parent directories for a path
@@ -116,11 +121,13 @@ parent_dirs(Path, Acc) ->
 %% Normalize path: ensure it starts with ./ for tar compatibility
 -spec normalize_path(binary()) -> binary().
 normalize_path(<<"/", Rest/binary>>) ->
-    <<"./", Rest/binary>>; %% Keep as binary interpolation
+    %% Keep as binary interpolation
+    <<"./", Rest/binary>>;
 normalize_path(<<"./", _/binary>> = Path) ->
     Path;
 normalize_path(Path) ->
-    <<"./", Path/binary>>. %% Keep as binary interpolation
+    %% Keep as binary interpolation
+    <<"./", Path/binary>>.
 
 %% Build a directory entry
 -spec build_dir_entry(binary()) -> iolist().
@@ -155,23 +162,43 @@ build_header(Name, Size, Mode, TypeFlag) ->
     MTime = erlang:system_time(second),
 
     %% Build header with placeholder checksum (spaces)
-    H0 = <<(pad_right(ShortName, ?NAME_SIZE))/binary,    % name
-           (octal(Mode, ?MODE_SIZE))/binary,             % mode
-           (octal(0, ?UID_SIZE))/binary,                 % uid
-           (octal(0, ?GID_SIZE))/binary,                 % gid
-           (octal(Size, ?SIZE_SIZE))/binary,             % size
-           (octal(MTime, ?MTIME_SIZE))/binary,           % mtime
-           "        ",                                   % checksum placeholder (8 spaces)
-           TypeFlag,                                     % typeflag
-           (pad_right(<<>>, ?LINKNAME_SIZE))/binary,     % linkname
-           "ustar",                                      % magic
-           0,                                            % null after magic
-           "00",                                         % version
-           (pad_right(~"root", ?UNAME_SIZE))/binary,     % uname
-           (pad_right(~"root", ?GNAME_SIZE))/binary,     % gname
-           (octal(0, ?DEVMAJOR_SIZE))/binary,            % devmajor
-           (octal(0, ?DEVMINOR_SIZE))/binary,            % devminor
-           (pad_right(Prefix, ?PREFIX_SIZE))/binary>>,      % prefix
+
+    % name
+    H0 = <<
+        (pad_right(ShortName, ?NAME_SIZE))/binary,
+        % mode
+        (octal(Mode, ?MODE_SIZE))/binary,
+        % uid
+        (octal(0, ?UID_SIZE))/binary,
+        % gid
+        (octal(0, ?GID_SIZE))/binary,
+        % size
+        (octal(Size, ?SIZE_SIZE))/binary,
+        % mtime
+        (octal(MTime, ?MTIME_SIZE))/binary,
+        % checksum placeholder (8 spaces)
+        "        ",
+        % typeflag
+        TypeFlag,
+        % linkname
+        (pad_right(<<>>, ?LINKNAME_SIZE))/binary,
+        % magic
+        "ustar",
+        % null after magic
+        0,
+        % version
+        "00",
+        % uname
+        (pad_right(~"root", ?UNAME_SIZE))/binary,
+        % gname
+        (pad_right(~"root", ?GNAME_SIZE))/binary,
+        % devmajor
+        (octal(0, ?DEVMAJOR_SIZE))/binary,
+        % devminor
+        (octal(0, ?DEVMINOR_SIZE))/binary,
+        % prefix
+        (pad_right(Prefix, ?PREFIX_SIZE))/binary
+    >>,
 
     %% Pad to full block size
     H1 = pad_right(H0, ?BLOCK_SIZE),
@@ -191,8 +218,9 @@ split_name(Name) when byte_size(Name) =< ?NAME_SIZE ->
 split_name(Name) ->
     %% Try to find a good split point (at a /)
     case find_split_point(Name) of
-        {ok, Prefix, ShortName}
-            when byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE ->
+        {ok, Prefix, ShortName} when
+            byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE
+        ->
             {Prefix, ShortName};
         _ ->
             %% Truncate if we can't split properly
@@ -215,10 +243,11 @@ find_valid_split(_Name, []) ->
 find_valid_split(Name, [{Pos, _} | Rest]) ->
     Prefix = binary:part(Name, 0, Pos),
     ShortName = binary:part(Name, Pos + 1, byte_size(Name) - Pos - 1),
-    if byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE ->
-           {ok, Prefix, ShortName};
-       true ->
-           find_valid_split(Name, Rest)
+    if
+        byte_size(ShortName) =< ?NAME_SIZE, byte_size(Prefix) =< ?PREFIX_SIZE ->
+            {ok, Prefix, ShortName};
+        true ->
+            find_valid_split(Name, Rest)
     end.
 
 %% Compute checksum (sum of all bytes, treating checksum field as spaces)
@@ -233,7 +262,9 @@ octal(N, Width) ->
     S = integer_to_list(N, 8),
     %% Field format: left-pad with zeros, leave room for trailing null (and optional space)
     %% Standard format: digits + space + null, or just digits + null
-    MaxDigits = Width - 1,  % Leave room for trailing null
+
+    % Leave room for trailing null
+    MaxDigits = Width - 1,
     case length(S) > MaxDigits of
         true ->
             %% Truncate if too long (shouldn't happen with valid data)
@@ -250,7 +281,7 @@ octal(N, Width) ->
 octal_checksum(N) ->
     S = integer_to_list(N, 8),
     Padded = lists:duplicate(6 - length(S), $0) ++ S,
-    list_to_binary(Padded ++ [0, $ ]).
+    list_to_binary(Padded ++ [0, $\s]).
 
 %% Pad binary to length with null bytes
 -spec pad_right(binary(), non_neg_integer()) -> binary().

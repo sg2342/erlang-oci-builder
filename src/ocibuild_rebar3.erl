@@ -40,25 +40,24 @@ Configuration in rebar.config:
 -spec init(rebar_state:t()) -> {ok, rebar_state:t()}.
 init(State) ->
     Provider =
-        providers:create([{name, ?PROVIDER},
-                          {module, ?MODULE},
-                          {bare, true},
-                          {deps, ?DEPS},
-                          {desc, "Build OCI container images from Erlang releases"},
-                          {short_desc, "Build OCI images"},
-                          {example, "rebar3 ocibuild -t myapp:1.0.0"},
-                          {opts,
-                           [{tag, $t, "tag", string, "Image tag (e.g., myapp:1.0.0)"},
-                            {registry, $r, "registry", string, "Registry for push (e.g., ghcr.io)"},
-                            {output, $o, "output", string, "Output tarball path"},
-                            {push,
-                             undefined,
-                             "push",
-                             {boolean, false},
-                             "Push to registry after build"},
-                            {base, undefined, "base", string, "Override base image"},
-                            {release, undefined, "release", string, "Release name (if multiple)"}]},
-                          {profiles, [default, prod]}]),
+        providers:create([
+            {name, ?PROVIDER},
+            {module, ?MODULE},
+            {bare, true},
+            {deps, ?DEPS},
+            {desc, "Build OCI container images from Erlang releases"},
+            {short_desc, "Build OCI images"},
+            {example, "rebar3 ocibuild -t myapp:1.0.0"},
+            {opts, [
+                {tag, $t, "tag", string, "Image tag (e.g., myapp:1.0.0)"},
+                {registry, $r, "registry", string, "Registry for push (e.g., ghcr.io)"},
+                {output, $o, "output", string, "Output tarball path"},
+                {push, undefined, "push", {boolean, false}, "Push to registry after build"},
+                {base, undefined, "base", string, "Override base image"},
+                {release, undefined, "release", string, "Release name (if multiple)"}
+            ]},
+            {profiles, [default, prod]}
+        ]),
     {ok, rebar_state:add_provider(State, Provider)}.
 
 -doc "Execute the provider - build OCI image from release.".
@@ -179,16 +178,18 @@ collect_release_files(ReleasePath) ->
 collect_files_recursive(BasePath, CurrentPath) ->
     case file:list_dir(CurrentPath) of
         {ok, Entries} ->
-            lists:flatmap(fun(Entry) ->
-                             FullPath = filename:join(CurrentPath, Entry),
-                             case filelib:is_dir(FullPath) of
-                                 true ->
-                                     collect_files_recursive(BasePath, FullPath);
-                                 false ->
-                                     [collect_single_file(BasePath, FullPath)]
-                             end
-                          end,
-                          Entries);
+            lists:flatmap(
+                fun(Entry) ->
+                    FullPath = filename:join(CurrentPath, Entry),
+                    case filelib:is_dir(FullPath) of
+                        true ->
+                            collect_files_recursive(BasePath, FullPath);
+                        false ->
+                            [collect_single_file(BasePath, FullPath)]
+                    end
+                end,
+                Entries
+            );
         {error, Reason} ->
             throw({file_error, CurrentPath, Reason})
     end.
@@ -316,10 +317,11 @@ build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels)
 
         %% Add labels
         Image6 =
-            maps:fold(fun(Key, Value, Img) -> ocibuild:label(Img, to_binary(Key), to_binary(Value))
-                      end,
-                      Image5,
-                      Labels),
+            maps:fold(
+                fun(Key, Value, Img) -> ocibuild:label(Img, to_binary(Key), to_binary(Value)) end,
+                Image5,
+                Labels
+            ),
 
         {ok, Image6}
     catch
@@ -338,12 +340,15 @@ output_image(State, Args, Config, Tag, Image) ->
                 %% Default: <tag>.tar.gz (with : replaced by -)
                 TagStr = binary_to_list(Tag),
                 SafeTag =
-                    lists:map(fun ($:) ->
-                                      $-;
-                                  (C) ->
-                                      C
-                              end,
-                              TagStr),
+                    lists:map(
+                        fun
+                            ($:) ->
+                                $-;
+                            (C) ->
+                                C
+                        end,
+                        TagStr
+                    ),
                 SafeTag ++ ".tar.gz";
             Path ->
                 Path

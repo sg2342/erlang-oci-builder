@@ -185,27 +185,30 @@ decode_object_pairs(B, Acc) ->
 decode_number(B) ->
     {NumStr, Rest} = take_number_chars(B, []),
     NumBin = iolist_to_binary(lists:reverse(NumStr)),
-    Num = case binary:match(NumBin, [~".", ~"e", ~"E"]) of
-              nomatch ->
-                  binary_to_integer(NumBin);
-              _ ->
-                  binary_to_float(NumBin)
-          end,
+    Num =
+        case binary:match(NumBin, [~".", ~"e", ~"E"]) of
+            nomatch ->
+                binary_to_integer(NumBin);
+            _ ->
+                binary_to_float(NumBin)
+        end,
     {Num, Rest}.
 
-take_number_chars(<<C, Rest/binary>>, Acc)
-    when C =:= $-
-         orelse C =:= $+
-         orelse C =:= $.
-         orelse C =:= $e
-         orelse C =:= $E
-         orelse C >= $0 andalso C =< $9 ->
+take_number_chars(<<C, Rest/binary>>, Acc) when
+    C =:= $- orelse
+        C =:= $+ orelse
+        C =:= $. orelse
+        C =:= $e orelse
+        C =:= $E orelse
+        C >= $0 andalso C =< $9
+->
     take_number_chars(Rest, [C | Acc]);
 take_number_chars(Rest, Acc) ->
     {Acc, Rest}.
 
-skip_ws(<<C, Rest/binary>>)
-    when C =:= $  orelse C =:= $\t orelse C =:= $\n orelse C =:= $\r ->
+skip_ws(<<C, Rest/binary>>) when
+    C =:= $\s orelse C =:= $\t orelse C =:= $\n orelse C =:= $\r
+->
     skip_ws(Rest);
 skip_ws(B) ->
     B.

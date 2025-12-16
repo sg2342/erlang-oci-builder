@@ -37,19 +37,23 @@ ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1">>,
 -export_type([image/0, layer/0, auth/0, base_ref/0]).
 
 -opaque image() ::
-    #{base := base_ref() | none,
-      base_manifest => map(),
-      base_config => map(),
-      layers := [layer()],
-      config := map()}.
+    #{
+        base := base_ref() | none,
+        base_manifest => map(),
+        base_config => map(),
+        layers := [layer()],
+        config := map()
+    }.
 
 -type base_ref() :: {Registry :: binary(), Repo :: binary(), Ref :: binary()}.
 -type layer() ::
-    #{media_type := binary(),
-      digest := binary(),
-      diff_id := binary(),
-      size := non_neg_integer(),
-      data := binary()}.
+    #{
+        media_type := binary(),
+        digest := binary(),
+        diff_id := binary(),
+        size := non_neg_integer(),
+        data := binary()
+    }.
 -type auth() :: #{username := binary(), password := binary()} | #{token := binary()}.
 
 %%%===================================================================
@@ -75,17 +79,19 @@ from(Ref) when is_binary(Ref) ->
         {error, _} = Err ->
             Err
     end;
-from({Registry, Repo, Tag} = Ref)
-    when is_binary(Registry), is_binary(Repo), is_binary(Tag) ->
+from({Registry, Repo, Tag} = Ref) when
+    is_binary(Registry), is_binary(Repo), is_binary(Tag)
+->
     %% Fetch the base image manifest and config from registry
     case ocibuild_registry:pull_manifest(Registry, Repo, Tag) of
         {ok, Manifest, Config} ->
-            {ok,
-             #{base => Ref,
-               base_manifest => Manifest,
-               base_config => Config,
-               layers => [],
-               config => init_config(Config)}};
+            {ok, #{
+                base => Ref,
+                base_manifest => Manifest,
+                base_config => Config,
+                layers => [],
+                config => init_config(Config)
+            }};
         {error, _} = Err ->
             Err
     end.
@@ -104,12 +110,13 @@ from(Ref, Auth) when is_binary(Ref) ->
 from({Registry, Repo, Tag} = Ref, Auth) ->
     case ocibuild_registry:pull_manifest(Registry, Repo, Tag, Auth) of
         {ok, Manifest, Config} ->
-            {ok,
-             #{base => Ref,
-               base_manifest => Manifest,
-               base_config => Config,
-               layers => [],
-               config => init_config(Config)}};
+            {ok, #{
+                base => Ref,
+                base_manifest => Manifest,
+                base_config => Config,
+                layers => [],
+                config => init_config(Config)
+            }};
         {error, _} = Err ->
             Err
     end.
@@ -126,16 +133,19 @@ Image2 = ocibuild:entrypoint(Image1, [<<"/myapp">>]).
 """.
 -spec scratch() -> {ok, image()}.
 scratch() ->
-    {ok,
-     #{base => none,
-       layers => [],
-       config =>
-           #{~"created" => iso8601_now(),
-             ~"architecture" => ~"amd64",
-             ~"os" => ~"linux",
-             ~"config" => #{},
-             ~"rootfs" => #{~"type" => ~"layers", ~"diff_ids" => []},
-             ~"history" => []}}}.
+    {ok, #{
+        base => none,
+        layers => [],
+        config =>
+            #{
+                ~"created" => iso8601_now(),
+                ~"architecture" => ~"amd64",
+                ~"os" => ~"linux",
+                ~"config" => #{},
+                ~"rootfs" => #{~"type" => ~"layers", ~"diff_ids" => []},
+                ~"history" => []
+            }
+    }}.
 
 %%%===================================================================
 %%% API - Adding content
@@ -152,7 +162,7 @@ Image1 = ocibuild:add_layer(Image, [
 ```
 """.
 -spec add_layer(image(), [{Path :: binary(), Content :: binary(), Mode :: integer()}]) ->
-                   image().
+    image().
 add_layer(#{layers := Layers, config := Config} = Image, Files) ->
     Layer = ocibuild_layer:create(Files),
     NewConfig = add_layer_to_config(Config, Layer),
@@ -171,14 +181,16 @@ Image1 = ocibuild:copy(Image, [
 Files will be created as `/app/myapp` and `/app/config.json`.
 """.
 -spec copy(image(), [{Name :: binary(), Content :: binary()}], Dest :: binary()) ->
-              image().
+    image().
 copy(Image, Files, Dest) ->
     LayerFiles =
-        lists:map(fun({Name, Content}) ->
-                     Path = filename:join(Dest, Name),
-                     {Path, Content, 8#644}
-                  end,
-                  Files),
+        lists:map(
+            fun({Name, Content}) ->
+                Path = filename:join(Dest, Name),
+                {Path, Content, 8#644}
+            end,
+            Files
+        ),
     add_layer(Image, LayerFiles).
 
 %%%===================================================================
@@ -220,9 +232,11 @@ Image1 = ocibuild:env(Image, #{
 -spec env(image(), #{binary() => binary()}) -> image().
 env(#{config := Config} = Image, EnvMap) when is_map(EnvMap) ->
     EnvList =
-        maps:fold(fun(K, V, Acc) -> [<<K/binary, "=", V/binary>> | Acc] end,
-                  get_config_field(Config, ~"Env", []),
-                  EnvMap),
+        maps:fold(
+            fun(K, V, Acc) -> [<<K/binary, "=", V/binary>> | Acc] end,
+            get_config_field(Config, ~"Env", []),
+            EnvMap
+        ),
     Image#{config := set_config_field(Config, ~"Env", EnvList)}.
 
 -doc "Set the working directory.".
@@ -275,7 +289,7 @@ ok = ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:v1.0.0">>,
 ```
 """.
 -spec push(image(), Registry :: binary(), RepoTag :: binary(), auth()) ->
-              ok | {error, term()}.
+    ok | {error, term()}.
 push(Image, Registry, RepoTag, Auth) ->
     {Repo, Tag} = parse_repo_tag(RepoTag),
     ocibuild_registry:push(Image, Registry, Repo, Tag, Auth).
@@ -364,9 +378,9 @@ split_name_tag(NameTag) ->
 -spec has_registry_chars(binary()) -> boolean().
 has_registry_chars(Part) ->
     %% A registry typically has a dot or colon (for port)
-    binary:match(Part, ~".") =/= nomatch
-    orelse binary:match(Part, ~":") =/= nomatch
-    orelse Part =:= ~"localhost".
+    binary:match(Part, ~".") =/= nomatch orelse
+        binary:match(Part, ~":") =/= nomatch orelse
+        Part =:= ~"localhost".
 
 -spec parse_repo_tag(binary()) -> {binary(), binary()}.
 parse_repo_tag(RepoTag) ->
@@ -382,13 +396,15 @@ parse_repo_tag(RepoTag) ->
 -spec init_config(map()) -> map().
 init_config(BaseConfig) ->
     %% Initialize config from base, preserving architecture/os
-    #{~"created" => iso8601_now(),
-      ~"architecture" => maps:get(~"architecture", BaseConfig, ~"amd64"),
-      ~"os" => maps:get(~"os", BaseConfig, ~"linux"),
-      ~"config" => maps:get(~"config", BaseConfig, #{}),
-      ~"rootfs" =>
-          maps:get(~"rootfs", BaseConfig, #{~"type" => ~"layers", ~"diff_ids" => []}),
-      ~"history" => maps:get(~"history", BaseConfig, [])}.
+    #{
+        ~"created" => iso8601_now(),
+        ~"architecture" => maps:get(~"architecture", BaseConfig, ~"amd64"),
+        ~"os" => maps:get(~"os", BaseConfig, ~"linux"),
+        ~"config" => maps:get(~"config", BaseConfig, #{}),
+        ~"rootfs" =>
+            maps:get(~"rootfs", BaseConfig, #{~"type" => ~"layers", ~"diff_ids" => []}),
+        ~"history" => maps:get(~"history", BaseConfig, [])
+    }.
 
 -spec add_layer_to_config(map(), layer()) -> map().
 add_layer_to_config(Config, #{diff_id := DiffId}) ->
@@ -415,5 +431,9 @@ get_config_field(Config, Field, Default) ->
 -spec iso8601_now() -> binary().
 iso8601_now() ->
     {{Y, Mo, D}, {H, Mi, S}} = calendar:universal_time(),
-    iolist_to_binary(io_lib:format("~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ",
-                                   [Y, Mo, D, H, Mi, S])).
+    iolist_to_binary(
+        io_lib:format(
+            "~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ",
+            [Y, Mo, D, H, Mi, S]
+        )
+    ).

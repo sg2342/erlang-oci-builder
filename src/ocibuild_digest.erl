@@ -9,7 +9,8 @@ content-addressable blobs.
 
 -export([sha256/1, sha256_hex/1, from_hex/1, to_hex/1, algorithm/1, encoded/1]).
 
--type digest() :: binary(). %% <<"sha256:abc123...">>
+%% <<"sha256:abc123...">>
+-type digest() :: binary().
 
 -export_type([digest/0]).
 
@@ -43,7 +44,8 @@ from_hex(Hex) when is_binary(Hex) ->
 -spec to_hex(binary()) -> binary().
 to_hex(Bin) when is_binary(Bin) ->
     string:lowercase(
-        binary:encode_hex(Bin)).
+        binary:encode_hex(Bin)
+    ).
 
 -doc """
 Extract the algorithm from a digest.
