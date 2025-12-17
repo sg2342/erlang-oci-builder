@@ -30,6 +30,13 @@ Configuration in rebar.config:
 %% Exported for use by Mix task (Elixir integration)
 -export([collect_release_files/1, build_image/7, build_image/8, get_auth/0]).
 
+%% Exports for testing
+-ifdef(TEST).
+-export([format_bytes/1, format_progress/2, to_binary/1, parse_tag/1]).
+-export([to_container_path/1, get_file_mode/1, strip_prefix/2, find_relx_release/1]).
+-export([get_base_image/2, make_relative_path/2, make_progress_callback/0]).
+-endif.
+
 -define(PROVIDER, ocibuild).
 -define(DEPS, [release]).
 -define(DEFAULT_BASE_IMAGE, ~"debian:stable-slim").

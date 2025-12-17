@@ -404,3 +404,511 @@ parse_image_ref_test() ->
     ?assertEqual(~"ghcr.io", R4),
     ?assertEqual(~"owner/repo", Repo4),
     ?assertEqual(~"tag", T4).
+
+%%%===================================================================
+%%% Additional TAR tests - long paths and edge cases
+%%%===================================================================
+
+tar_empty_files_test() ->
+    %% Test with no files - should still produce valid TAR with end marker
+    Tar = ocibuild_tar:create([]),
+    %% Should be two 512-byte zero blocks (end marker)
+    ?assertEqual(1024, byte_size(Tar)).
+
+tar_multiple_directories_test() ->
+    %% Test with deeply nested directories
+    Files = [
+        {~"/a/b/c/file1.txt", ~"content1", 8#644},
+        {~"/a/b/file2.txt", ~"content2", 8#644},
+        {~"/x/y/z/file3.txt", ~"content3", 8#755}
+    ],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    %% Should contain all content
+    ?assert(binary:match(Tar, ~"content1") =/= nomatch),
+    ?assert(binary:match(Tar, ~"content2") =/= nomatch),
+    ?assert(binary:match(Tar, ~"content3") =/= nomatch).
+
+tar_large_content_test() ->
+    %% Test with content that spans multiple blocks
+    LargeContent = binary:copy(~"0123456789", 100),
+    Files = [{~"/large.txt", LargeContent, 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    ?assert(byte_size(Tar) > 1024).
+
+tar_long_path_test() ->
+    %% Test path that exceeds 100 characters (requires prefix field)
+    LongDir = binary:copy(~"subdir/", 20),
+    LongPath = <<LongDir/binary, "file.txt">>,
+    Files = [{LongPath, ~"test", 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512).
+
+tar_exact_block_size_test() ->
+    %% Test content exactly 512 bytes (should need no padding)
+    Content = binary:copy(~"X", 512),
+    Files = [{~"/exact.txt", Content, 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512).
+
+tar_root_file_test() ->
+    %% Test file at root level without leading slash
+    Files = [{~"rootfile.txt", ~"content", 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    ?assert(binary:match(Tar, ~"content") =/= nomatch).
+
+tar_various_permissions_test() ->
+    %% Test different file permissions
+    Files = [
+        {~"/script.sh", ~"#!/bin/sh", 8#755},
+        {~"/readonly.txt", ~"readonly", 8#444},
+        {~"/private.key", ~"secret", 8#600}
+    ],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512).
+
+tar_already_normalized_path_test() ->
+    %% Test paths that start with ./
+    Files = [{~"./already/normalized/file.txt", ~"content", 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512).
+
+tar_safe_dots_test() ->
+    %% Test that single dot and filenames with dots are allowed
+    Files = [
+        {~"/some.file.with.dots.txt", ~"content1", 8#644},
+        {~"/dir.with.dots/file.txt", ~"content2", 8#644}
+    ],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512).
+
+%%%===================================================================
+%%% Additional Digest tests
+%%%===================================================================
+
+digest_sha256_hex_test() ->
+    %% Test sha256_hex without prefix
+    Hex = ocibuild_digest:sha256_hex(~"hello"),
+    ?assertEqual(64, byte_size(Hex)),
+    ?assertMatch(~"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", Hex).
+
+digest_to_hex_test() ->
+    %% Test to_hex
+    Hex = ocibuild_digest:to_hex(<<255, 0, 127, 128>>),
+    ?assertEqual(~"ff007f80", Hex).
+
+digest_from_hex_test() ->
+    %% Test from_hex
+    Bin = ocibuild_digest:from_hex(~"FF007F80"),
+    ?assertEqual(<<255, 0, 127, 128>>, Bin).
+
+digest_roundtrip_test() ->
+    %% Test to_hex -> from_hex roundtrip
+    Original = <<1, 2, 3, 4, 5, 6, 7, 8>>,
+    Hex = ocibuild_digest:to_hex(Original),
+    Result = ocibuild_digest:from_hex(Hex),
+    ?assertEqual(Original, Result).
+
+digest_invalid_algorithm_test() ->
+    %% Test algorithm with invalid digest (no colon)
+    ?assertError({invalid_digest, ~"nocolon"}, ocibuild_digest:algorithm(~"nocolon")).
+
+digest_invalid_encoded_test() ->
+    %% Test encoded with invalid digest (no colon)
+    ?assertError({invalid_digest, ~"nocolon"}, ocibuild_digest:encoded(~"nocolon")).
+
+digest_empty_data_test() ->
+    %% Test SHA256 of empty binary
+    Digest = ocibuild_digest:sha256(<<>>),
+    ?assertMatch(<<"sha256:", _/binary>>, Digest).
+
+%%%===================================================================
+%%% Additional JSON tests
+%%%===================================================================
+
+json_encode_pretty_test() ->
+    %% Test encode_pretty (currently same as encode)
+    Result = ocibuild_json:encode_pretty(#{~"key" => ~"value"}),
+    ?assert(is_binary(Result)),
+    Decoded = ocibuild_json:decode(Result),
+    ?assertEqual(#{~"key" => ~"value"}, Decoded).
+
+json_encode_nested_test() ->
+    %% Test deeply nested structures
+    Nested = #{~"level1" => #{~"level2" => #{~"level3" => ~"value"}}},
+    Json = ocibuild_json:encode(Nested),
+    Decoded = ocibuild_json:decode(Json),
+    ?assertEqual(Nested, Decoded).
+
+json_encode_list_of_maps_test() ->
+    %% Test list of maps
+    Data = [#{~"a" => 1}, #{~"b" => 2}],
+    Json = ocibuild_json:encode(Data),
+    Decoded = ocibuild_json:decode(Json),
+    ?assertEqual(Data, Decoded).
+
+json_encode_empty_structures_test() ->
+    %% Test empty map and list
+    ?assertEqual(~"{}", ocibuild_json:encode(#{})),
+    ?assertEqual(~"[]", ocibuild_json:encode([])).
+
+json_encode_special_chars_test() ->
+    %% Test strings with special characters
+    Data = ~"line1\nline2\ttab",
+    Json = ocibuild_json:encode(Data),
+    Decoded = ocibuild_json:decode(Json),
+    ?assertEqual(Data, Decoded).
+
+json_encode_unicode_test() ->
+    %% Test unicode strings
+    Data = ~"hello 世界",
+    Json = ocibuild_json:encode(Data),
+    Decoded = ocibuild_json:decode(Json),
+    ?assertEqual(Data, Decoded).
+
+%%%===================================================================
+%%% Additional Manifest tests
+%%%===================================================================
+
+manifest_media_types_test() ->
+    ?assertEqual(
+        ~"application/vnd.oci.image.manifest.v1+json",
+        ocibuild_manifest:media_type()
+    ),
+    ?assertEqual(
+        ~"application/vnd.oci.image.config.v1+json",
+        ocibuild_manifest:config_media_type()
+    ).
+
+manifest_layer_media_types_test() ->
+    %% Test all compression types
+    ?assertEqual(
+        ~"application/vnd.oci.image.layer.v1.tar+gzip",
+        ocibuild_manifest:layer_media_type()
+    ),
+    ?assertEqual(
+        ~"application/vnd.oci.image.layer.v1.tar+gzip",
+        ocibuild_manifest:layer_media_type(gzip)
+    ),
+    ?assertEqual(
+        ~"application/vnd.oci.image.layer.v1.tar+zstd",
+        ocibuild_manifest:layer_media_type(zstd)
+    ),
+    ?assertEqual(
+        ~"application/vnd.oci.image.layer.v1.tar",
+        ocibuild_manifest:layer_media_type(none)
+    ).
+
+manifest_build_test() ->
+    ConfigDesc = #{
+        ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
+        ~"digest" => ~"sha256:abc123",
+        ~"size" => 100
+    },
+    LayerDesc = #{
+        ~"mediaType" => ~"application/vnd.oci.image.layer.v1.tar+gzip",
+        ~"digest" => ~"sha256:def456",
+        ~"size" => 200
+    },
+    {ManifestJson, ManifestDigest} = ocibuild_manifest:build(ConfigDesc, [LayerDesc]),
+    ?assert(is_binary(ManifestJson)),
+    ?assertMatch(<<"sha256:", _/binary>>, ManifestDigest),
+    %% Verify manifest structure
+    Decoded = ocibuild_json:decode(ManifestJson),
+    ?assertEqual(2, maps:get(~"schemaVersion", Decoded)),
+    ?assertEqual(~"application/vnd.oci.image.manifest.v1+json", maps:get(~"mediaType", Decoded)).
+
+manifest_build_empty_layers_test() ->
+    ConfigDesc = #{
+        ~"mediaType" => ~"application/vnd.oci.image.config.v1+json",
+        ~"digest" => ~"sha256:abc123",
+        ~"size" => 100
+    },
+    {ManifestJson, _Digest} = ocibuild_manifest:build(ConfigDesc, []),
+    Decoded = ocibuild_json:decode(ManifestJson),
+    ?assertEqual([], maps:get(~"layers", Decoded)).
+
+%%%===================================================================
+%%% Additional Image Configuration tests
+%%%===================================================================
+
+multiple_env_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:env(Image0, #{~"VAR1" => ~"val1", ~"VAR2" => ~"val2"}),
+    Image2 = ocibuild:env(Image1, #{~"VAR3" => ~"val3"}),
+
+    Config = maps:get(config, Image2),
+    InnerConfig = maps:get(~"config", Config),
+    EnvList = maps:get(~"Env", InnerConfig),
+
+    ?assertEqual(3, length(EnvList)),
+    ?assert(lists:member(~"VAR1=val1", EnvList)),
+    ?assert(lists:member(~"VAR2=val2", EnvList)),
+    ?assert(lists:member(~"VAR3=val3", EnvList)).
+
+multiple_expose_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:expose(Image0, 80),
+    Image2 = ocibuild:expose(Image1, 443),
+    Image3 = ocibuild:expose(Image2, ~"8080"),
+
+    Config = maps:get(config, Image3),
+    InnerConfig = maps:get(~"config", Config),
+    ExposedPorts = maps:get(~"ExposedPorts", InnerConfig),
+
+    ?assert(maps:is_key(~"80/tcp", ExposedPorts)),
+    ?assert(maps:is_key(~"443/tcp", ExposedPorts)),
+    ?assert(maps:is_key(~"8080/tcp", ExposedPorts)).
+
+multiple_labels_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:label(Image0, ~"label1", ~"value1"),
+    Image2 = ocibuild:label(Image1, ~"label2", ~"value2"),
+    Image3 = ocibuild:label(Image2, ~"org.opencontainers.image.title", ~"My App"),
+
+    Config = maps:get(config, Image3),
+    InnerConfig = maps:get(~"config", Config),
+    Labels = maps:get(~"Labels", InnerConfig),
+
+    ?assertEqual(~"value1", maps:get(~"label1", Labels)),
+    ?assertEqual(~"value2", maps:get(~"label2", Labels)),
+    ?assertEqual(~"My App", maps:get(~"org.opencontainers.image.title", Labels)).
+
+cmd_and_entrypoint_test() ->
+    %% Test setting both CMD and ENTRYPOINT
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:entrypoint(Image0, [~"/usr/bin/myapp"]),
+    Image2 = ocibuild:cmd(Image1, [~"--config", ~"/etc/myapp.conf"]),
+
+    Config = maps:get(config, Image2),
+    InnerConfig = maps:get(~"config", Config),
+
+    ?assertEqual([~"/usr/bin/myapp"], maps:get(~"Entrypoint", InnerConfig)),
+    ?assertEqual([~"--config", ~"/etc/myapp.conf"], maps:get(~"Cmd", InnerConfig)).
+
+config_created_timestamp_test() ->
+    %% Test that created timestamp is set
+    {ok, Image} = ocibuild:scratch(),
+    Config = maps:get(config, Image),
+    Created = maps:get(~"created", Config),
+    ?assert(is_binary(Created)),
+    %% Should be ISO8601 format
+    ?assertMatch(<<_:4/binary, "-", _:2/binary, "-", _:2/binary, "T", _/binary>>, Created).
+
+config_architecture_test() ->
+    %% Test default architecture
+    {ok, Image} = ocibuild:scratch(),
+    Config = maps:get(config, Image),
+    ?assertEqual(~"amd64", maps:get(~"architecture", Config)),
+    ?assertEqual(~"linux", maps:get(~"os", Config)).
+
+%%%===================================================================
+%%% Layout tests - additional coverage
+%%%===================================================================
+
+save_tarball_with_tag_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/test.txt", ~"hello", 8#644}]),
+
+    TmpFile = make_temp_file("ocibuild_test_tag", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image1, TmpFile, #{tag => ~"myapp:v1.0.0"}),
+        ?assert(filelib:is_file(TmpFile))
+    after
+        file:delete(TmpFile)
+    end.
+
+export_multiple_layers_test() ->
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/file1.txt", ~"content1", 8#644}]),
+    Image2 = ocibuild:add_layer(Image1, [{~"/file2.txt", ~"content2", 8#644}]),
+    Image3 = ocibuild:entrypoint(Image2, [~"/bin/sh"]),
+
+    TmpDir = make_temp_dir("ocibuild_test_multi"),
+    try
+        ok = ocibuild:export(Image3, TmpDir),
+
+        %% Verify blobs directory has multiple files
+        BlobsDir = filename:join([TmpDir, "blobs", "sha256"]),
+        {ok, Files} = file:list_dir(BlobsDir),
+        %% Should have config + manifest + 2 layers = 4 blobs
+        ?assertEqual(4, length(Files))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+export_with_config_test() ->
+    %% Test export with full configuration
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/app", ~"binary", 8#755}]),
+    Image2 = ocibuild:entrypoint(Image1, [~"/app"]),
+    Image3 = ocibuild:cmd(Image2, [~"--help"]),
+    Image4 = ocibuild:env(Image3, #{~"DEBUG" => ~"1"}),
+    Image5 = ocibuild:workdir(Image4, ~"/app"),
+    Image6 = ocibuild:expose(Image5, 8080),
+    Image7 = ocibuild:label(Image6, ~"version", ~"1.0"),
+    Image8 = ocibuild:user(Image7, ~"app"),
+
+    TmpDir = make_temp_dir("ocibuild_test_fullconfig"),
+    try
+        ok = ocibuild:export(Image8, TmpDir),
+        ?assert(filelib:is_file(filename:join(TmpDir, "index.json")))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+%%%===================================================================
+%%% Layout internal function tests
+%%%===================================================================
+
+layout_format_size_bytes_test() ->
+    ?assertEqual("100 B", lists:flatten(ocibuild_layout:format_size(100))),
+    ?assertEqual("0 B", lists:flatten(ocibuild_layout:format_size(0))),
+    ?assertEqual("1023 B", lists:flatten(ocibuild_layout:format_size(1023))).
+
+layout_format_size_kilobytes_test() ->
+    ?assertEqual("1.0 KB", lists:flatten(ocibuild_layout:format_size(1024))),
+    ?assertEqual("1.5 KB", lists:flatten(ocibuild_layout:format_size(1536))),
+    ?assertEqual("100.0 KB", lists:flatten(ocibuild_layout:format_size(102400))).
+
+layout_format_size_megabytes_test() ->
+    ?assertEqual("1.0 MB", lists:flatten(ocibuild_layout:format_size(1024 * 1024))),
+    ?assertEqual("10.5 MB", lists:flatten(ocibuild_layout:format_size(11010048))).
+
+layout_format_size_gigabytes_test() ->
+    ?assertEqual("1.00 GB", lists:flatten(ocibuild_layout:format_size(1024 * 1024 * 1024))),
+    ?assertEqual(
+        "2.50 GB", lists:flatten(ocibuild_layout:format_size(round(2.5 * 1024 * 1024 * 1024)))
+    ).
+
+layout_is_retriable_error_test() ->
+    %% Retriable errors
+    ?assertEqual(true, ocibuild_layout:is_retriable_error({failed_connect, some_reason})),
+    ?assertEqual(true, ocibuild_layout:is_retriable_error(timeout)),
+    ?assertEqual(true, ocibuild_layout:is_retriable_error({http_error, 500, "Internal Error"})),
+    ?assertEqual(true, ocibuild_layout:is_retriable_error({http_error, 502, "Bad Gateway"})),
+    ?assertEqual(
+        true, ocibuild_layout:is_retriable_error({http_error, 503, "Service Unavailable"})
+    ),
+    ?assertEqual(true, ocibuild_layout:is_retriable_error({http_error, 504, "Gateway Timeout"})),
+    ?assertEqual(true, ocibuild_layout:is_retriable_error(closed)),
+
+    %% Non-retriable errors
+    ?assertEqual(false, ocibuild_layout:is_retriable_error({http_error, 404, "Not Found"})),
+    ?assertEqual(false, ocibuild_layout:is_retriable_error({http_error, 401, "Unauthorized"})),
+    ?assertEqual(false, ocibuild_layout:is_retriable_error(unknown_error)),
+    ?assertEqual(false, ocibuild_layout:is_retriable_error({some, complex, error})).
+
+layout_blob_path_test() ->
+    ?assertEqual(
+        ~"blobs/sha256/abc123def456",
+        ocibuild_layout:blob_path(~"sha256:abc123def456")
+    ).
+
+layout_build_index_test() ->
+    Index = ocibuild_layout:build_index(~"sha256:manifest123", 500, ~"myapp:1.0.0"),
+    ?assertEqual(2, maps:get(~"schemaVersion", Index)),
+    Manifests = maps:get(~"manifests", Index),
+    ?assertEqual(1, length(Manifests)),
+    [Manifest] = Manifests,
+    ?assertEqual(~"sha256:manifest123", maps:get(~"digest", Manifest)),
+    ?assertEqual(500, maps:get(~"size", Manifest)),
+    Annotations = maps:get(~"annotations", Manifest),
+    ?assertEqual(~"myapp:1.0.0", maps:get(~"org.opencontainers.image.ref.name", Annotations)).
+
+%%%===================================================================
+%%% Layout tests with mocking for base layers
+%%%===================================================================
+
+layout_base_layer_test_() ->
+    {foreach, fun setup_layout_meck/0, fun cleanup_layout_meck/1, [
+        {"save tarball with base image", fun save_tarball_base_image_test/0},
+        {"save tarball base layer download failure", fun save_tarball_base_layer_failure_test/0}
+    ]}.
+
+setup_layout_meck() ->
+    %% Unload any existing mock first
+    catch meck:unload(ocibuild_registry),
+    meck:new(ocibuild_registry, [no_link]),
+    ok.
+
+cleanup_layout_meck(_) ->
+    meck:unload(ocibuild_registry),
+    ok.
+
+save_tarball_base_image_test() ->
+    %% Mock pull_blob to return compressed layer data
+    LayerData = zlib:gzip(<<"layer content">>),
+    meck:expect(
+        ocibuild_registry,
+        pull_blob,
+        fun(_Registry, _Repo, _Digest, _Auth, _Opts) ->
+            {ok, LayerData}
+        end
+    ),
+
+    %% Create image with base manifest that has layers
+    BaseManifest = #{
+        ~"schemaVersion" => 2,
+        ~"layers" => [
+            #{
+                ~"mediaType" => ~"application/vnd.oci.image.layer.v1.tar+gzip",
+                ~"digest" => ~"sha256:baselayer123",
+                ~"size" => 100
+            }
+        ]
+    },
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = ocibuild:add_layer(Image0, [{~"/test.txt", ~"hello", 8#644}]),
+    %% Add base image info
+    Image2 = Image1#{
+        base => {~"docker.io", ~"library/alpine", ~"latest"},
+        base_manifest => BaseManifest
+    },
+
+    TmpFile = make_temp_file("ocibuild_base", ".tar.gz"),
+    try
+        ok = ocibuild:save(Image2, TmpFile, #{tag => ~"test:1.0"}),
+        ?assert(filelib:is_file(TmpFile)),
+        %% Verify pull_blob was called
+        ?assert(meck:called(ocibuild_registry, pull_blob, '_'))
+    after
+        file:delete(TmpFile)
+    end.
+
+save_tarball_base_layer_failure_test() ->
+    %% Mock pull_blob to fail with non-retriable error
+    meck:expect(
+        ocibuild_registry,
+        pull_blob,
+        fun(_Registry, _Repo, _Digest, _Auth, _Opts) ->
+            {error, {http_error, 404, "Not Found"}}
+        end
+    ),
+
+    BaseManifest = #{
+        ~"schemaVersion" => 2,
+        ~"layers" => [
+            #{
+                ~"mediaType" => ~"application/vnd.oci.image.layer.v1.tar+gzip",
+                ~"digest" => ~"sha256:baselayer123",
+                ~"size" => 100
+            }
+        ]
+    },
+    {ok, Image0} = ocibuild:scratch(),
+    Image1 = Image0#{
+        base => {~"docker.io", ~"library/alpine", ~"latest"},
+        base_manifest => BaseManifest
+    },
+
+    TmpFile = make_temp_file("ocibuild_fail", ".tar.gz"),
+    try
+        %% Should return error when base layer download fails
+        Result = ocibuild:save(Image1, TmpFile),
+        ?assertMatch({error, _}, Result)
+    after
+        file:delete(TmpFile)
+    end.

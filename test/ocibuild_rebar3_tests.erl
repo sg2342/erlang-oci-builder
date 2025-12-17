@@ -171,6 +171,360 @@ get_auth_username_password_test() ->
     end.
 
 %%%===================================================================
+%%% Format error tests
+%%%===================================================================
+
+format_error_missing_tag_test() ->
+    Result = ocibuild_rebar3:format_error(missing_tag),
+    ?assert(is_list(Result)),
+    ?assert(string:find(Result, "--tag") =/= nomatch).
+
+format_error_release_not_found_test() ->
+    Result = ocibuild_rebar3:format_error({release_not_found, "myapp", "/path/to/rel"}),
+    ?assert(is_list(Result)),
+    ?assert(string:find(Result, "myapp") =/= nomatch).
+
+format_error_no_release_test() ->
+    Result = ocibuild_rebar3:format_error({no_release_configured, []}),
+    ?assert(is_list(Result)),
+    ?assert(string:find(Result, "No release") =/= nomatch).
+
+format_error_file_read_error_test() ->
+    Result = ocibuild_rebar3:format_error({file_read_error, "/path/file", enoent}),
+    ?assert(is_list(Result)),
+    ?assert(string:find(Result, "/path/file") =/= nomatch).
+
+format_error_save_failed_test() ->
+    Result = ocibuild_rebar3:format_error({save_failed, some_reason}),
+    ?assert(is_list(Result)),
+    ?assert(string:find(Result, "save") =/= nomatch).
+
+format_error_push_failed_test() ->
+    Result = ocibuild_rebar3:format_error({push_failed, auth_error}),
+    ?assert(is_list(Result)),
+    ?assert(string:find(Result, "push") =/= nomatch).
+
+format_error_base_image_failed_test() ->
+    Result = ocibuild_rebar3:format_error({base_image_failed, not_found}),
+    ?assert(is_list(Result)),
+    ?assert(string:find(Result, "base image") =/= nomatch).
+
+format_error_generic_test() ->
+    Result = ocibuild_rebar3:format_error({some, random, error}),
+    ?assert(is_list(Result)).
+
+%%%===================================================================
+%%% Format bytes tests
+%%%===================================================================
+
+format_bytes_test() ->
+    ?assertEqual("100 B", lists:flatten(ocibuild_rebar3:format_bytes(100))),
+    ?assertEqual("0 B", lists:flatten(ocibuild_rebar3:format_bytes(0))),
+    ?assertEqual("1.0 KB", lists:flatten(ocibuild_rebar3:format_bytes(1024))),
+    ?assertEqual("1.0 MB", lists:flatten(ocibuild_rebar3:format_bytes(1024 * 1024))),
+    ?assertEqual("1.00 GB", lists:flatten(ocibuild_rebar3:format_bytes(1024 * 1024 * 1024))).
+
+%%%===================================================================
+%%% Format progress tests
+%%%===================================================================
+
+format_progress_unknown_total_test() ->
+    Result = lists:flatten(ocibuild_rebar3:format_progress(1024, unknown)),
+    ?assert(string:find(Result, "1.0 KB") =/= nomatch).
+
+format_progress_with_percent_test() ->
+    Result = lists:flatten(ocibuild_rebar3:format_progress(512, 1024)),
+    ?assert(string:find(Result, "50%") =/= nomatch).
+
+format_progress_complete_test() ->
+    Result = lists:flatten(ocibuild_rebar3:format_progress(1024, 1024)),
+    ?assert(string:find(Result, "100%") =/= nomatch).
+
+format_progress_zero_total_test() ->
+    %% Should handle zero/invalid total gracefully
+    Result = lists:flatten(ocibuild_rebar3:format_progress(100, 0)),
+    ?assert(is_list(Result)).
+
+%%%===================================================================
+%%% to_binary tests
+%%%===================================================================
+
+to_binary_binary_test() ->
+    ?assertEqual(~"test", ocibuild_rebar3:to_binary(~"test")).
+
+to_binary_list_test() ->
+    ?assertEqual(~"hello", ocibuild_rebar3:to_binary("hello")).
+
+to_binary_atom_test() ->
+    ?assertEqual(~"myatom", ocibuild_rebar3:to_binary(myatom)).
+
+%%%===================================================================
+%%% parse_tag tests (using exported function)
+%%%===================================================================
+
+parse_tag_exported_simple_test() ->
+    ?assertEqual({~"myapp", ~"1.0.0"}, ocibuild_rebar3:parse_tag(~"myapp:1.0.0")).
+
+parse_tag_exported_no_version_test() ->
+    ?assertEqual({~"myapp", ~"latest"}, ocibuild_rebar3:parse_tag(~"myapp")).
+
+%%%===================================================================
+%%% build_image with custom cmd tests
+%%%===================================================================
+
+build_image_with_custom_cmd_test() ->
+    Files =
+        [
+            {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755}
+        ],
+
+    {ok, Image} = ocibuild_rebar3:build_image(
+        ~"scratch", Files, "myapp", ~"/app", #{}, [], #{}, ~"start"
+    ),
+
+    Config = maps:get(config, Image),
+    InnerConfig = maps:get(~"config", Config),
+    %% Should use custom cmd "start" instead of default "foreground"
+    ?assertEqual(
+        [~"/app/bin/myapp", ~"start"],
+        maps:get(~"Entrypoint", InnerConfig)
+    ).
+
+%%%===================================================================
+%%% Auth partial tests
+%%%===================================================================
+
+get_auth_username_only_test() ->
+    os:unsetenv("OCIBUILD_TOKEN"),
+    os:putenv("OCIBUILD_USERNAME", "myuser"),
+    os:unsetenv("OCIBUILD_PASSWORD"),
+    try
+        %% Missing password should return empty
+        ?assertEqual(#{}, ocibuild_rebar3:get_auth())
+    after
+        os:unsetenv("OCIBUILD_USERNAME")
+    end.
+
+get_auth_password_only_test() ->
+    os:unsetenv("OCIBUILD_TOKEN"),
+    os:unsetenv("OCIBUILD_USERNAME"),
+    os:putenv("OCIBUILD_PASSWORD", "mypass"),
+    try
+        %% Missing username should return empty
+        ?assertEqual(#{}, ocibuild_rebar3:get_auth())
+    after
+        os:unsetenv("OCIBUILD_PASSWORD")
+    end.
+
+%%%===================================================================
+%%% to_container_path tests
+%%%===================================================================
+
+to_container_path_simple_test() ->
+    ?assertEqual(~"/app/bin/myapp", ocibuild_rebar3:to_container_path("bin/myapp")).
+
+to_container_path_nested_test() ->
+    ?assertEqual(
+        ~"/app/lib/myapp/ebin/myapp.beam",
+        ocibuild_rebar3:to_container_path("lib/myapp/ebin/myapp.beam")
+    ).
+
+%%%===================================================================
+%%% get_file_mode tests
+%%%===================================================================
+
+get_file_mode_test() ->
+    TmpDir = make_temp_dir("ocibuild_mode"),
+    try
+        %% Create a file with specific permissions
+        FilePath = filename:join(TmpDir, "test.txt"),
+        ok = file:write_file(FilePath, <<"test">>),
+        ok = file:change_mode(FilePath, 8#644),
+        ?assertEqual(8#644, ocibuild_rebar3:get_file_mode(FilePath)),
+
+        %% Create executable
+        ExePath = filename:join(TmpDir, "test.sh"),
+        ok = file:write_file(ExePath, <<"#!/bin/sh">>),
+        ok = file:change_mode(ExePath, 8#755),
+        ?assertEqual(8#755, ocibuild_rebar3:get_file_mode(ExePath))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+get_file_mode_nonexistent_test() ->
+    %% Non-existent file should return default mode
+    ?assertEqual(8#644, ocibuild_rebar3:get_file_mode("/nonexistent/path")).
+
+%%%===================================================================
+%%% strip_prefix tests
+%%%===================================================================
+
+strip_prefix_simple_test() ->
+    ?assertEqual(
+        "file.txt", ocibuild_rebar3:strip_prefix(["foo", "bar"], ["foo", "bar", "file.txt"])
+    ).
+
+strip_prefix_nested_test() ->
+    ?assertEqual(
+        filename:join(["a", "b", "c.txt"]),
+        ocibuild_rebar3:strip_prefix(["base"], ["base", "a", "b", "c.txt"])
+    ).
+
+strip_prefix_no_match_test() ->
+    %% If no match, return full path
+    ?assertEqual(
+        filename:join(["other", "path"]),
+        ocibuild_rebar3:strip_prefix(["foo"], ["other", "path"])
+    ).
+
+strip_prefix_partial_match_test() ->
+    %% When paths diverge, return remaining from full path
+    ?assertEqual(
+        filename:join(["x", "y"]),
+        ocibuild_rebar3:strip_prefix(["a", "b"], ["a", "x", "y"])
+    ).
+
+%%%===================================================================
+%%% find_relx_release tests
+%%%===================================================================
+
+find_relx_release_simple_test() ->
+    Config = [{release, {myapp, "1.0.0"}, [kernel, stdlib]}],
+    ?assertEqual({ok, "myapp"}, ocibuild_rebar3:find_relx_release(Config)).
+
+find_relx_release_with_opts_test() ->
+    Config = [{release, {myapp, "1.0.0"}, [kernel], [{dev_mode, true}]}],
+    ?assertEqual({ok, "myapp"}, ocibuild_rebar3:find_relx_release(Config)).
+
+find_relx_release_empty_test() ->
+    ?assertEqual(error, ocibuild_rebar3:find_relx_release([])).
+
+find_relx_release_no_release_test() ->
+    Config = [{profiles, [{prod, []}]}, {deps, []}],
+    ?assertEqual(error, ocibuild_rebar3:find_relx_release(Config)).
+
+find_relx_release_multiple_test() ->
+    %% Should return the first release found
+    Config = [
+        {release, {app1, "1.0"}, [kernel]},
+        {release, {app2, "2.0"}, [stdlib]}
+    ],
+    ?assertEqual({ok, "app1"}, ocibuild_rebar3:find_relx_release(Config)).
+
+%%%===================================================================
+%%% get_base_image tests
+%%%===================================================================
+
+get_base_image_from_args_test() ->
+    Args = [{base, "alpine:3.19"}],
+    Config = [{base_image, ~"debian:slim"}],
+    ?assertEqual(~"alpine:3.19", ocibuild_rebar3:get_base_image(Args, Config)).
+
+get_base_image_from_config_test() ->
+    Args = [],
+    Config = [{base_image, ~"ubuntu:22.04"}],
+    ?assertEqual(~"ubuntu:22.04", ocibuild_rebar3:get_base_image(Args, Config)).
+
+get_base_image_default_test() ->
+    Args = [],
+    Config = [],
+    ?assertEqual(~"debian:stable-slim", ocibuild_rebar3:get_base_image(Args, Config)).
+
+%%%===================================================================
+%%% make_relative_path tests
+%%%===================================================================
+
+make_relative_path_simple_test() ->
+    ?assertEqual(
+        "file.txt", ocibuild_rebar3:make_relative_path("/base/path", "/base/path/file.txt")
+    ).
+
+make_relative_path_nested_test() ->
+    ?assertEqual(
+        filename:join(["a", "b", "c.txt"]),
+        ocibuild_rebar3:make_relative_path("/base", "/base/a/b/c.txt")
+    ).
+
+%%%===================================================================
+%%% Additional build_image tests
+%%%===================================================================
+
+build_image_all_options_test() ->
+    Files =
+        [
+            {~"/app/bin/myapp", ~"#!/bin/sh\necho hello", 8#755}
+        ],
+
+    {ok, Image} = ocibuild_rebar3:build_image(
+        ~"scratch",
+        Files,
+        "myapp",
+        ~"/app",
+        #{~"LANG" => ~"C.UTF-8", ~"DEBUG" => ~"1"},
+        [8080, 443],
+        #{~"version" => ~"1.0.0", ~"author" => ~"test"}
+    ),
+
+    Config = maps:get(config, Image),
+    InnerConfig = maps:get(~"config", Config),
+
+    %% Check env
+    EnvList = maps:get(~"Env", InnerConfig),
+    ?assertEqual(2, length(EnvList)),
+
+    %% Check ports
+    ExposedPorts = maps:get(~"ExposedPorts", InnerConfig),
+    ?assert(maps:is_key(~"8080/tcp", ExposedPorts)),
+    ?assert(maps:is_key(~"443/tcp", ExposedPorts)),
+
+    %% Check labels
+    Labels = maps:get(~"Labels", InnerConfig),
+    ?assertEqual(~"1.0.0", maps:get(~"version", Labels)),
+    ?assertEqual(~"test", maps:get(~"author", Labels)).
+
+%%%===================================================================
+%%% format_progress edge cases
+%%%===================================================================
+
+format_progress_negative_total_test() ->
+    %% Negative total should be handled
+    Result = lists:flatten(ocibuild_rebar3:format_progress(100, -1)),
+    ?assert(is_list(Result)).
+
+format_progress_large_values_test() ->
+    %% Large values (gigabytes)
+    Result = lists:flatten(
+        ocibuild_rebar3:format_progress(1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024)
+    ),
+    ?assert(string:find(Result, "50%") =/= nomatch).
+
+format_progress_overflow_test() ->
+    %% More received than total should cap at 100%
+    Result = lists:flatten(ocibuild_rebar3:format_progress(2000, 1000)),
+    ?assert(string:find(Result, "100%") =/= nomatch).
+
+%%%===================================================================
+%%% Progress callback tests
+%%%===================================================================
+
+make_progress_callback_test() ->
+    %% Get the callback
+    Callback = ocibuild_rebar3:make_progress_callback(),
+    ?assert(is_function(Callback, 1)),
+
+    %% Test calling it with manifest phase
+    ok = Callback(#{phase => manifest, bytes_received => 100, total_bytes => 200}),
+
+    %% Test calling it with config phase
+    ok = Callback(#{phase => config, bytes_received => 50, total_bytes => 100}),
+
+    %% Test calling it with layer phase
+    ok = Callback(#{phase => layer, bytes_received => 1024, total_bytes => 2048}),
+
+    %% Test with unknown total
+    ok = Callback(#{phase => manifest, bytes_received => 100, total_bytes => unknown}).
+
+%%%===================================================================
 %%% Test fixtures
 %%%===================================================================
 

@@ -23,6 +23,11 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 
 -export([export_directory/2, save_tarball/2, save_tarball/3]).
 
+%% Exports for testing
+-ifdef(TEST).
+-export([format_size/1, is_retriable_error/1, blob_path/1, build_index/3]).
+-endif.
+
 %% Common file permission modes
 
 % rw-r--r-- (regular files)

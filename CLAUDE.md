@@ -62,7 +62,7 @@ User API (ocibuild.erl)
 
 ## Current Status
 
-**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (docker load compatible). 17 unit tests passing.
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah).
 
 **Untested:** Registry pull/push, Docker Hub token auth, GHCR/other registry auth.
 
