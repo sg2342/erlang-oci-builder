@@ -289,11 +289,3 @@ Then use it with `ocibuild`:
 ```erlang
 {ocibuild, [{base_image, "myorg/erlang-base:1.0"}]}.
 ```
-
-## Requirements
-
-- OTP 27 or newer (uses the new `json` module)
-
-## License
-
-Apache License 2.0
