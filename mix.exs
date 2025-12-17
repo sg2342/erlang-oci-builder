@@ -15,8 +15,7 @@ defmodule Ocibuild.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description: description(),
-      package: package(),
-      docs: docs()
+      package: package()
     ]
   end
 
@@ -27,9 +26,7 @@ defmodule Ocibuild.MixProject do
   end
 
   defp deps do
-    [
-      {:ex_doc, "~> 0.31", only: :dev, runtime: false}
-    ]
+    []
   end
 
   defp description do
@@ -42,14 +39,6 @@ defmodule Ocibuild.MixProject do
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url},
       files: ~w(lib src include priv mix.exs rebar.config README.md LICENSE CHANGELOG.md)
-    ]
-  end
-
-  defp docs do
-    [
-      main: "readme",
-      source_url: @source_url,
-      extras: ["README.md"]
     ]
   end
 end
