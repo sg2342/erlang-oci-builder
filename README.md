@@ -1,9 +1,6 @@
-# ocibuild
+# ocibuild - Build and publish OCI container images from the BEAM
 
-[![Hex.pm](https://img.shields.io/hexpm/v/ocibuild.svg)](https://hex.pm/packages/ocibuild)
-[![Hex.pm](https://img.shields.io/hexpm/l/ocibuild.svg)](https://hex.pm/packages/ocibuild)
-
-Build and publish OCI container images from the BEAM.
+[![Hex.pm](https://img.shields.io/hexpm/v/ocibuild.svg)](https://hex.pm/packages/ocibuild)  [![Hex.pm](https://img.shields.io/hexpm/l/ocibuild.svg)](https://hex.pm/packages/ocibuild)
 
 `ocibuild` is an Erlang library for building OCI-compliant container images. 
 It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependencies outside OTP 27+.
