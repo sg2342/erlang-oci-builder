@@ -184,7 +184,7 @@ save_tarball(Image, Path, Opts) ->
 %%% Internal functions
 %%%===================================================================
 
-%% Download base image layers from registry
+%% Download base image layers from registry (with caching)
 -spec build_base_layers(ocibuild:image()) -> [{binary(), binary(), integer()}].
 build_base_layers(
     #{
@@ -196,16 +196,11 @@ build_base_layers(
     TotalLayers = length(ManifestLayers),
     {_, Files} = lists:foldl(
         fun(#{~"digest" := Digest, ~"size" := Size}, {Index, Acc}) ->
-            io:format("  Downloading layer ~B/~B (~s)...~n", [Index, TotalLayers, format_size(Size)]),
-            case pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, 3) of
-                {ok, CompressedData} ->
-                    io:format("  Layer ~B/~B complete~n", [Index, TotalLayers]),
-                    %% OCI format keeps layers compressed with digest as path
-                    {Index + 1, Acc ++ [{blob_path(Digest), CompressedData, ?MODE_FILE}]};
-                {error, Reason} ->
-                    %% Fail build instead of silently producing broken images
-                    error({layer_download_failed, Digest, Reason})
-            end
+            CompressedData = get_or_download_layer(
+                Registry, Repo, Digest, Auth, Size, Index, TotalLayers
+            ),
+            %% OCI format keeps layers compressed with digest as path
+            {Index + 1, Acc ++ [{blob_path(Digest), CompressedData, ?MODE_FILE}]}
         end,
         {1, []},
         ManifestLayers
@@ -213,6 +208,40 @@ build_base_layers(
     Files;
 build_base_layers(_Image) ->
     [].
+
+%% Get layer from cache or download from registry
+-spec get_or_download_layer(
+    binary(), binary(), binary(), map(), non_neg_integer(), pos_integer(), pos_integer()
+) -> binary().
+get_or_download_layer(Registry, Repo, Digest, Auth, Size, Index, TotalLayers) ->
+    case ocibuild_cache:get(Digest) of
+        {ok, CachedData} ->
+            io:format("  Layer ~B/~B cached (~s)~n", [Index, TotalLayers, format_size(Size)]),
+            CachedData;
+        {error, _} ->
+            %% Not in cache or corrupted, download from registry
+            io:format("  Downloading layer ~B/~B (~s)...~n", [Index, TotalLayers, format_size(Size)]),
+            case pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, 3) of
+                {ok, CompressedData} ->
+                    io:format("  Layer ~B/~B complete~n", [Index, TotalLayers]),
+                    %% Cache the downloaded layer for future builds
+                    case ocibuild_cache:put(Digest, CompressedData) of
+                        ok ->
+                            ok;
+                        {error, CacheErr} ->
+                            %% Log but don't fail - caching is best-effort
+                            io:format(
+                                standard_error,
+                                "  Warning: Failed to cache layer: ~p~n",
+                                [CacheErr]
+                            )
+                    end,
+                    CompressedData;
+                {error, Reason} ->
+                    %% Fail build instead of silently producing broken images
+                    error({layer_download_failed, Digest, Reason})
+            end
+    end.
 
 %% Pull blob with retry logic for transient failures
 -spec pull_blob_with_retry(
