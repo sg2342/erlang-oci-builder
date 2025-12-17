@@ -3,18 +3,15 @@
 [![Hex.pm](https://img.shields.io/hexpm/v/ocibuild.svg)](https://hex.pm/packages/ocibuild)
 [![Hex.pm](https://img.shields.io/hexpm/l/ocibuild.svg)](https://hex.pm/packages/ocibuild)
 
-Build and publish OCI container images from the BEAM — no Docker required.
+Build and publish OCI container images from the BEAM.
 
-ocibuild is a pure Erlang library for building OCI-compliant container images
-programmatically. It works from any BEAM language (Erlang, Elixir, Gleam, LFE)
-and has **zero dependencies** outside OTP 27+.
+`ocibuild` is an Erlang library for building OCI-compliant container images. 
+It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependencies outside OTP 27+.
 
 ## Features
 
 - 🚀 **No Docker daemon required** — builds images directly
 - 📦 **Push to any registry** — Docker Hub, GHCR, ECR, GCR, etc.
-- 🔧 **Pure Erlang** — works from any BEAM language
-- 🪶 **Zero dependencies** — only OTP 27+ required
 - 📋 **OCI compliant** — produces standard OCI image layouts
 
 ## Installation
@@ -41,7 +38,7 @@ end
 
 ### Mix Task (Elixir)
 
-The easiest way to use ocibuild with Elixir:
+The easiest way to use `ocibuild` with Elixir:
 
 ```elixir
 # mix.exs
@@ -66,8 +63,8 @@ end
 MIX_ENV=prod mix release
 MIX_ENV=prod mix ocibuild -t myapp:1.0.0
 
-# Load into Docker
-docker load < myapp-1.0.0.tar.gz
+# Load into podman
+podman load < myapp-1.0.0.tar.gz
 
 # Or push directly to a registry
 OCIBUILD_TOKEN=$GITHUB_TOKEN mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
@@ -90,7 +87,7 @@ Then simply run `MIX_ENV=prod mix release` and the OCI image is built automatica
 
 ### Rebar3 Plugin (Erlang)
 
-The easiest way to use ocibuild with Erlang:
+The easiest way to use `ocibuild` with Erlang:
 
 ```erlang
 %% rebar.config
@@ -98,7 +95,7 @@ The easiest way to use ocibuild with Erlang:
 
 {ocibuild, [
     {base_image, "debian:slim"},
-    {env, #{<<"LANG">> => <<"C.UTF-8">>}},
+    {env, #{~"LANG" => ~"C.UTF-8"}},
     {expose, [8080]}
 ]}.
 ```
@@ -107,8 +104,8 @@ The easiest way to use ocibuild with Erlang:
 # Build release and create OCI image
 rebar3 ocibuild -t myapp:1.0.0
 
-# Load into Docker
-docker load < myapp-1.0.0.tar.gz
+# Load into podman
+podman load < myapp-1.0.0.tar.gz
 
 # Or push directly to a registry
 OCIBUILD_TOKEN=$GITHUB_TOKEN rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
@@ -118,21 +115,21 @@ OCIBUILD_TOKEN=$GITHUB_TOKEN rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/my
 
 ```erlang
 %% Build from a base image
-{ok, Image0} = ocibuild:from(<<"docker.io/library/alpine:3.19">>),
+{ok, Image0} = ocibuild:from(~"docker.io/library/alpine:3.19"),
 
 %% Add your application
 {ok, AppBinary} = file:read_file("_build/prod/rel/myapp/myapp"),
-Image1 = ocibuild:copy(Image0, [{<<"myapp">>, AppBinary}], <<"/app">>),
+Image1 = ocibuild:copy(Image0, [{~"myapp", AppBinary}], ~"/app"),
 
 %% Configure the container
-Image2 = ocibuild:entrypoint(Image1, [<<"/app/myapp">>, <<"start">>]),
-Image3 = ocibuild:env(Image2, #{<<"MIX_ENV">> => <<"prod">>}),
+Image2 = ocibuild:entrypoint(Image1, [~"/app/myapp", ~"start"]),
+Image3 = ocibuild:env(Image2, #{~"MIX_ENV" => ~"prod"}),
 
 %% Push to a registry
-ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1.0.0">>,
+ok = ocibuild:push(Image3, ~"ghcr.io", ~"myorg/myapp:v1.0.0",
                      #{token => os:getenv("GITHUB_TOKEN")}).
 
-%% Or save as a tarball for docker load
+%% Or save as a tarball for podman load
 ok = ocibuild:save(Image3, "myapp.tar.gz").
 ```
 
@@ -155,20 +152,27 @@ image = :ocibuild.env(image, %{"MIX_ENV" => "prod"})
                        %{token: System.get_env("GITHUB_TOKEN")})
 ```
 
-## Rebar3 Plugin Reference
+## CLI Reference
 
-### CLI Options
+Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--tag` | `-t` | Image tag (required), e.g., `myapp:1.0.0` |
-| `--registry` | `-r` | Registry for push, e.g., `ghcr.io` |
-| `--output` | `-o` | Output tarball path (default: `<tag>.tar.gz`) |
-| `--push` | | Push to registry after build |
-| `--base` | | Override base image |
-| `--release` | | Release name (if multiple configured) |
+| Option       | Short | Description                                   |
+|--------------|-------|-----------------------------------------------|
+| `--tag`      | `-t`  | Image tag, e.g., `myapp:1.0.0`                |
+| `--registry` | `-r`  | Registry for push, e.g., `ghcr.io`            |
+| `--output`   | `-o`  | Output tarball path (default: `<tag>.tar.gz`) |
+| `--push`     |       | Push to registry after build                  |
+| `--base`     |       | Override base image                           |
+| `--release`  |       | Release name (if multiple configured)         |
+| `--cmd`      | `-c`  | Release start command (Elixir only)           |
 
-### Configuration (`rebar.config`)
+**Notes:**
+- Tag defaults to `app:version` in Mix, required in rebar3
+- `--cmd` options (Elixir): `start`, `start_iex`, `daemon`, `daemon_iex`
+
+## Configuration
+
+### rebar.config (Erlang)
 
 ```erlang
 {ocibuild, [
@@ -176,45 +180,16 @@ image = :ocibuild.env(image, %{"MIX_ENV" => "prod"})
     {registry, "docker.io"},               % Default registry for --push
     {workdir, "/app"},                     % Working directory in container
     {env, #{                               % Environment variables
-        <<"LANG">> => <<"C.UTF-8">>
+        ~"LANG" => ~"C.UTF-8"
     }},
     {expose, [8080, 443]},                 % Ports to expose
     {labels, #{                            % Image labels
-        <<"org.opencontainers.image.source">> => <<"https://github.com/...">>
+        ~"org.opencontainers.image.source" => ~"https://github.com/..."
     }}
 ]}.
 ```
 
-Note: Erlang releases use `foreground` as the default start command.
-
-### Authentication
-
-Set environment variables for registry authentication:
-
-```bash
-# Token-based (GitHub, etc.)
-export OCIBUILD_TOKEN="your-token"
-
-# Username/password
-export OCIBUILD_USERNAME="user"
-export OCIBUILD_PASSWORD="pass"
-```
-
-## Mix Task Reference (Elixir)
-
-### CLI Options
-
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--tag` | `-t` | Image tag, e.g., `myapp:1.0.0`. Defaults to `release:version` |
-| `--registry` | `-r` | Registry for push, e.g., `ghcr.io` |
-| `--output` | `-o` | Output tarball path (default: `<tag>.tar.gz`) |
-| `--cmd` | `-c` | Release start command (default: `start`). Options: `start`, `start_iex`, `daemon`, `daemon_iex` |
-| `--push` | | Push to registry after build |
-| `--base` | | Override base image |
-| `--release` | | Release name (if multiple configured) |
-
-### Configuration (`mix.exs`)
+### mix.exs (Elixir)
 
 ```elixir
 def project do
@@ -239,74 +214,70 @@ def project do
 end
 ```
 
-Available `cmd` values for Elixir releases:
-- `start` — Start the system (default)
-- `start_iex` — Start with IEx attached
-- `daemon` — Start as a daemon (background)
-- `daemon_iex` — Daemon with IEx attached
-
 ## Programmatic API Reference
 
 ### Building Images
 
-| Function | Description |
-|----------|-------------|
-| `from/1`, `from/2` | Start from a base image |
-| `scratch/0` | Start from an empty image |
+| Function           | Description               |
+|--------------------|---------------------------|
+| `from/1`, `from/2` | Start from a base image   |
+| `scratch/0`        | Start from an empty image |
 
 ### Adding Content
 
-| Function | Description |
-|----------|-------------|
-| `add_layer/2` | Add a layer from files with modes |
-| `copy/3` | Copy files to a destination directory |
+| Function      | Description                           |
+|---------------|---------------------------------------|
+| `add_layer/2` | Add a layer from files with modes     |
+| `copy/3`      | Copy files to a destination directory |
 
 ### Configuration
 
-| Function | Description |
-|----------|-------------|
-| `entrypoint/2` | Set the container entrypoint |
-| `cmd/2` | Set default command arguments |
-| `env/2` | Set environment variables |
-| `workdir/2` | Set working directory |
-| `expose/2` | Expose a port |
-| `label/3` | Add a label |
-| `user/2` | Set the user to run as |
+| Function       | Description                   |
+|----------------|-------------------------------|
+| `entrypoint/2` | Set the container entrypoint  |
+| `cmd/2`        | Set default command arguments |
+| `env/2`        | Set environment variables     |
+| `workdir/2`    | Set working directory         |
+| `expose/2`     | Expose a port                 |
+| `label/3`      | Add a label                   |
+| `user/2`       | Set the user to run as        |
 
 ### Output
 
-| Function | Description |
-|----------|-------------|
-| `push/3`, `push/4` | Push to a container registry |
-| `save/2` | Save as OCI layout tarball |
-| `export/2` | Export as OCI layout directory |
+| Function           | Description                    |
+|--------------------|--------------------------------|
+| `push/3`, `push/4` | Push to a container registry   |
+| `save/2`           | Save as OCI layout tarball     |
+| `export/2`         | Export as OCI layout directory |
 
-## Registry Authentication
+## Authentication
 
-### Docker Hub
+### CLI (Environment Variables)
 
-```erlang
-Auth = #{username => <<"myuser">>, password => <<"mypassword">>}.
-ocibuild:push(Image, <<"docker.io">>, <<"myuser/myapp:latest">>, Auth).
+```bash
+# Token-based (GitHub, etc.)
+export OCIBUILD_TOKEN="your-token"
+
+# Username/password
+export OCIBUILD_USERNAME="user"
+export OCIBUILD_PASSWORD="pass"
 ```
 
-### GitHub Container Registry (GHCR)
+### Programmatic API
 
 ```erlang
+%% Token auth (GHCR, etc.)
 Auth = #{token => os:getenv("GITHUB_TOKEN")}.
-ocibuild:push(Image, <<"ghcr.io">>, <<"myorg/myapp:latest">>, Auth).
-```
+ocibuild:push(Image, ~"ghcr.io", ~"myorg/myapp:latest", Auth).
 
-### Generic Token Auth
-
-```erlang
-Auth = #{token => <<"my-registry-token">>}.
-ocibuild:push(Image, <<"my.registry.com">>, <<"myapp:latest">>, Auth).
+%% Username/password (Docker Hub, etc.)
+Auth = #{username => ~"myuser", password => ~"mypassword"}.
+ocibuild:push(Image, ~"docker.io", ~"myuser/myapp:latest", Auth).
 ```
 
 ## How It Works
 
-ocibuild builds OCI images by:
+`ocibuild` builds OCI images by:
 
 1. **Fetching base image metadata** from the registry (manifest + config)
 2. **Creating new layers** as gzip-compressed tar archives in memory
@@ -314,14 +285,10 @@ ocibuild builds OCI images by:
 4. **Generating OCI config and manifest** JSON
 5. **Pushing blobs and manifest** to the target registry
 
-This is the same approach used by .NET's `Microsoft.NET.Build.Containers`,
-Google's `ko`, and Java's `jib`.
-
 ## Choosing a Base Image
 
-ocibuild is a build-time tool that creates OCI layers — it doesn't have a container
-runtime, so there's no equivalent to Dockerfile's `RUN apt-get install`. This is the
-same trade-off made by jib, ko, and .NET's container builder.
+`ocibuild` is a build-time tool that creates OCI layers — it doesn't have a container runtime, 
+so there's no equivalent to Dockerfile's `RUN apt-get install`. 
 
 If your application needs libraries not in the base image, you have several options:
 
@@ -353,7 +320,7 @@ docker build -t myorg/erlang-base:1.0 -f Dockerfile.base .
 docker push myorg/erlang-base:1.0
 ```
 
-Then use it with ocibuild:
+Then use it with `ocibuild`:
 
 ```erlang
 {ocibuild, [{base_image, "myorg/erlang-base:1.0"}]}.
