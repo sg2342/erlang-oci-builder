@@ -16,6 +16,9 @@ See: https://github.com/opencontainers/distribution-spec
     check_blob_exists/4
 ]).
 
+%% Retry utilities (shared with ocibuild_layout)
+-export([is_retriable_error/1, with_retry/2]).
+
 %% Export internal HTTP functions (used via ?MODULE: for mockability in tests)
 -export([http_get/2, http_head/2]).
 
@@ -1082,6 +1085,70 @@ http_put(Url, Headers, Body) ->
 -spec normalize_headers([{string(), string()}]) -> [{string(), string()}].
 normalize_headers(Headers) ->
     [{string:lowercase(K), V} || {K, V} <- Headers].
+
+%%%===================================================================
+%%% Retry helpers
+%%%===================================================================
+
+-doc """
+Check if an error is retriable (transient network/server issues).
+
+Returns true for connection failures, timeouts, and server errors (5xx).
+""".
+-spec is_retriable_error(term()) -> boolean().
+is_retriable_error({failed_connect, _}) -> true;
+is_retriable_error(timeout) -> true;
+is_retriable_error({http_error, 500, _}) -> true;
+is_retriable_error({http_error, 502, _}) -> true;
+is_retriable_error({http_error, 503, _}) -> true;
+is_retriable_error({http_error, 504, _}) -> true;
+% Rate limited
+is_retriable_error({http_error, 429, _}) -> true;
+is_retriable_error(closed) -> true;
+is_retriable_error(econnreset) -> true;
+is_retriable_error({error, econnreset}) -> true;
+is_retriable_error(_) -> false.
+
+-doc """
+Execute a function with retry logic for transient failures.
+
+Takes a zero-arity function that returns `{ok, Result}` or `{error, Reason}`.
+Retries up to MaxRetries times with exponential backoff for retriable errors.
+
+Example:
+```
+with_retry(fun() -> pull_blob(R, Repo, D, Auth, Opts) end, 3)
+```
+""".
+-spec with_retry(fun(() -> {ok, T} | {error, term()}), non_neg_integer()) ->
+    {ok, T} | {error, term()}
+when
+    T :: term().
+with_retry(Fun, MaxRetries) ->
+    with_retry(Fun, MaxRetries, MaxRetries).
+
+-spec with_retry(fun(() -> {ok, T} | {error, term()}), non_neg_integer(), non_neg_integer()) ->
+    {ok, T} | {error, term()}
+when
+    T :: term().
+with_retry(Fun, _MaxRetries, 0) ->
+    %% No retries left, make final attempt
+    Fun();
+with_retry(Fun, MaxRetries, RetriesLeft) ->
+    case Fun() of
+        {ok, _} = Success ->
+            Success;
+        {error, Reason} = Error ->
+            case is_retriable_error(Reason) of
+                true when RetriesLeft > 0 ->
+                    %% Exponential backoff: 1s, 2s, 3s...
+                    Delay = (MaxRetries - RetriesLeft + 1) * 1000,
+                    timer:sleep(Delay),
+                    with_retry(Fun, MaxRetries, RetriesLeft - 1);
+                _ ->
+                    Error
+            end
+    end.
 
 %%%===================================================================
 %%% Progress helpers

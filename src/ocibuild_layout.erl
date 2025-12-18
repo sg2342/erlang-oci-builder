@@ -25,7 +25,7 @@ See: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
 
 %% Exports for testing
 -ifdef(TEST).
--export([format_size/1, is_retriable_error/1, blob_path/1, build_index/3]).
+-export([format_size/1, blob_path/1, build_index/3]).
 -endif.
 
 %% Common file permission modes
@@ -244,36 +244,12 @@ get_or_download_layer(Registry, Repo, Digest, Auth, Size, Index, TotalLayers) ->
     binary(), binary(), binary(), map(), non_neg_integer(), non_neg_integer()
 ) ->
     {ok, binary()} | {error, term()}.
-pull_blob_with_retry(_Registry, _Repo, _Digest, _Auth, _Size, 0) ->
-    {error, max_retries_exceeded};
-pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, RetriesLeft) ->
+pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, MaxRetries) ->
     Opts = #{size => Size},
-    case ocibuild_registry:pull_blob(Registry, Repo, Digest, Auth, Opts) of
-        {ok, _Data} = Success ->
-            Success;
-        {error, Reason} = Error ->
-            case is_retriable_error(Reason) of
-                true when RetriesLeft > 1 ->
-                    %% Wait before retry with exponential backoff
-                    Delay = (4 - RetriesLeft) * 1000,
-                    io:format("  Retrying in ~Bs...~n", [Delay div 1000]),
-                    timer:sleep(Delay),
-                    pull_blob_with_retry(Registry, Repo, Digest, Auth, Size, RetriesLeft - 1);
-                _ ->
-                    Error
-            end
-    end.
-
-%% Check if an error is retriable (transient network issues)
--spec is_retriable_error(term()) -> boolean().
-is_retriable_error({failed_connect, _}) -> true;
-is_retriable_error(timeout) -> true;
-is_retriable_error({http_error, 500, _}) -> true;
-is_retriable_error({http_error, 502, _}) -> true;
-is_retriable_error({http_error, 503, _}) -> true;
-is_retriable_error({http_error, 504, _}) -> true;
-is_retriable_error(closed) -> true;
-is_retriable_error(_) -> false.
+    ocibuild_registry:with_retry(
+        fun() -> ocibuild_registry:pull_blob(Registry, Repo, Digest, Auth, Opts) end,
+        MaxRetries
+    ).
 
 %% Format byte size for display
 -spec format_size(non_neg_integer()) -> string().

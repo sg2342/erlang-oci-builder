@@ -776,23 +776,32 @@ layout_format_size_gigabytes_test() ->
         "2.50 GB", lists:flatten(ocibuild_layout:format_size(round(2.5 * 1024 * 1024 * 1024)))
     ).
 
-layout_is_retriable_error_test() ->
-    %% Retriable errors
-    ?assertEqual(true, ocibuild_layout:is_retriable_error({failed_connect, some_reason})),
-    ?assertEqual(true, ocibuild_layout:is_retriable_error(timeout)),
-    ?assertEqual(true, ocibuild_layout:is_retriable_error({http_error, 500, "Internal Error"})),
-    ?assertEqual(true, ocibuild_layout:is_retriable_error({http_error, 502, "Bad Gateway"})),
+registry_is_retriable_error_test() ->
+    %% Retriable errors - connection/timeout
+    ?assertEqual(true, ocibuild_registry:is_retriable_error({failed_connect, some_reason})),
+    ?assertEqual(true, ocibuild_registry:is_retriable_error(timeout)),
+    ?assertEqual(true, ocibuild_registry:is_retriable_error(closed)),
+    ?assertEqual(true, ocibuild_registry:is_retriable_error(econnreset)),
+    ?assertEqual(true, ocibuild_registry:is_retriable_error({error, econnreset})),
+
+    %% Retriable errors - server errors (5xx)
+    ?assertEqual(true, ocibuild_registry:is_retriable_error({http_error, 500, "Internal Error"})),
+    ?assertEqual(true, ocibuild_registry:is_retriable_error({http_error, 502, "Bad Gateway"})),
     ?assertEqual(
-        true, ocibuild_layout:is_retriable_error({http_error, 503, "Service Unavailable"})
+        true, ocibuild_registry:is_retriable_error({http_error, 503, "Service Unavailable"})
     ),
-    ?assertEqual(true, ocibuild_layout:is_retriable_error({http_error, 504, "Gateway Timeout"})),
-    ?assertEqual(true, ocibuild_layout:is_retriable_error(closed)),
+    ?assertEqual(true, ocibuild_registry:is_retriable_error({http_error, 504, "Gateway Timeout"})),
+
+    %% Retriable errors - rate limiting
+    ?assertEqual(
+        true, ocibuild_registry:is_retriable_error({http_error, 429, "Too Many Requests"})
+    ),
 
     %% Non-retriable errors
-    ?assertEqual(false, ocibuild_layout:is_retriable_error({http_error, 404, "Not Found"})),
-    ?assertEqual(false, ocibuild_layout:is_retriable_error({http_error, 401, "Unauthorized"})),
-    ?assertEqual(false, ocibuild_layout:is_retriable_error(unknown_error)),
-    ?assertEqual(false, ocibuild_layout:is_retriable_error({some, complex, error})).
+    ?assertEqual(false, ocibuild_registry:is_retriable_error({http_error, 404, "Not Found"})),
+    ?assertEqual(false, ocibuild_registry:is_retriable_error({http_error, 401, "Unauthorized"})),
+    ?assertEqual(false, ocibuild_registry:is_retriable_error(unknown_error)),
+    ?assertEqual(false, ocibuild_registry:is_retriable_error({some, complex, error})).
 
 layout_blob_path_test() ->
     ?assertEqual(
@@ -824,7 +833,8 @@ layout_base_layer_test_() ->
 setup_layout_meck() ->
     %% Unload any existing mock first
     catch meck:unload(ocibuild_registry),
-    meck:new(ocibuild_registry, [no_link]),
+    %% Use passthrough so with_retry/2 and other non-mocked functions work
+    meck:new(ocibuild_registry, [no_link, passthrough]),
     ok.
 
 cleanup_layout_meck(_) ->

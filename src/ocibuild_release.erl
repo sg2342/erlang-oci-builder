@@ -234,14 +234,13 @@ collect_entry(BasePath, FullPath, Workdir) ->
                 {ok, regular} ->
                     [collect_single_file(BasePath, FullPath, Workdir)];
                 {error, outside_release} ->
-                    logger:warning(
-                        "Skipping symlink ~s: target is outside release directory",
-                        [FullPath]
-                    ),
+                    io:format("  Warning: Skipping symlink ~s (target outside release)~n", [
+                        FullPath
+                    ]),
                     [];
                 {error, _Reason} ->
                     %% Broken symlink or other error - skip
-                    logger:warning("Skipping broken symlink: ~s", [FullPath]),
+                    io:format("  Warning: Skipping broken symlink ~s~n", [FullPath]),
                     []
             end;
         {ok, #file_info{type = directory}} ->
