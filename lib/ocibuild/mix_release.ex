@@ -17,7 +17,7 @@ defmodule Ocibuild.MixRelease do
           ],
           ocibuild: [
             base_image: "debian:slim",
-            registry: "ghcr.io/myorg",
+            push: "ghcr.io/myorg",  # Registry to push to (omit to skip push)
             # tag: "myapp:1.0.0",  # Optional, defaults to release_name:version
             workdir: "/app",
             env: %{"LANG" => "C.UTF-8"},
@@ -36,12 +36,11 @@ defmodule Ocibuild.MixRelease do
 
     * `:base_image` - Base image (default: "debian:slim")
     * `:tag` - Image tag (default: release_name:release_version)
-    * `:registry` - Registry for push
+    * `:push` - Registry to push to (e.g., "ghcr.io/myorg"). Omit to skip push.
     * `:workdir` - Working directory in container (default: "/app")
     * `:env` - Environment variables map
     * `:expose` - Ports to expose
     * `:labels` - Image labels map
-    * `:push` - Push to registry after build (default: false)
   """
 
   @doc """
@@ -64,7 +63,7 @@ defmodule Ocibuild.MixRelease do
     env_map = Keyword.get(ocibuild_config, :env, %{}) |> to_erlang_map()
     expose_ports = Keyword.get(ocibuild_config, :expose, [])
     labels = Keyword.get(ocibuild_config, :labels, %{}) |> to_erlang_map()
-    should_push = Keyword.get(ocibuild_config, :push, false)
+    push_registry = Keyword.get(ocibuild_config, :push)
     # Elixir releases use "start" command (Erlang uses "foreground")
     cmd = Keyword.get(ocibuild_config, :cmd, "start")
 
@@ -96,7 +95,7 @@ defmodule Ocibuild.MixRelease do
                build_opts
              ) do
           {:ok, image} ->
-            output_image(image, tag, ocibuild_config, should_push)
+            output_image(image, tag, push_registry)
             release
 
           {:error, reason} ->
@@ -115,7 +114,7 @@ defmodule Ocibuild.MixRelease do
     end
   end
 
-  defp output_image(image, tag, ocibuild_config, should_push) do
+  defp output_image(image, tag, push_registry) do
     # Generate output path
     safe_tag = String.replace(tag, ":", "-")
     output_path = "#{safe_tag}.tar.gz"
@@ -126,8 +125,8 @@ defmodule Ocibuild.MixRelease do
       :ok ->
         Mix.shell().info("OCI image saved successfully")
 
-        if should_push do
-          push_image(image, tag, ocibuild_config)
+        if push_registry do
+          push_image(image, tag, push_registry)
         else
           Mix.shell().info("To load: docker load < #{output_path}")
         end
@@ -137,8 +136,7 @@ defmodule Ocibuild.MixRelease do
     end
   end
 
-  defp push_image(image, tag, ocibuild_config) do
-    registry = Keyword.get(ocibuild_config, :registry, "docker.io")
+  defp push_image(image, tag, registry) do
     {repo, image_tag} = parse_tag(tag)
     auth = :ocibuild_rebar3.get_push_auth()
 

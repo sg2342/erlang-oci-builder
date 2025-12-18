@@ -77,7 +77,7 @@ Build OCI images directly from releases:
 rebar3 ocibuild -t myapp:1.0.0
 
 # Build and push to registry
-rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 
 # Custom base image
 rebar3 ocibuild -t myapp:1.0.0 --base erlang:27-alpine
@@ -87,7 +87,6 @@ Configuration in `rebar.config`:
 ```erlang
 {ocibuild, [
     {base_image, "debian:slim"},
-    {registry, "docker.io"},
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
@@ -109,7 +108,7 @@ MIX_ENV=prod mix release
 MIX_ENV=prod mix ocibuild -t myapp:1.0.0
 
 # Push to registry
-MIX_ENV=prod mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+MIX_ENV=prod mix ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 ```
 
 Configuration in `mix.exs`:
@@ -118,7 +117,6 @@ def project do
   [
     ocibuild: [
       base_image: "debian:slim",
-      registry: "ghcr.io/myorg",
       env: %{"LANG" => "C.UTF-8"},
       expose: [8080]
     ]

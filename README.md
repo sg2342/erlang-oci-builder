@@ -79,7 +79,7 @@ MIX_ENV=prod mix ocibuild -t myapp:1.0.0
 podman load < myapp-1.0.0.tar.gz
 
 # Or push directly to a registry
-OCIBUILD_PUSH_PASSWORD=$GITHUB_TOKEN OCIBUILD_PUSH_USERNAME=$GITHUB_ACTOR mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+OCIBUILD_PUSH_PASSWORD=$GITHUB_TOKEN OCIBUILD_PUSH_USERNAME=$GITHUB_ACTOR mix ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 ```
 
 #### Automatic Release Step
@@ -120,7 +120,7 @@ rebar3 ocibuild -t myapp:1.0.0
 podman load < myapp-1.0.0.tar.gz
 
 # Or push directly to a registry
-OCIBUILD_PUSH_PASSWORD=$GITHUB_TOKEN OCIBUILD_PUSH_USERNAME=$GITHUB_ACTOR rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+OCIBUILD_PUSH_PASSWORD=$GITHUB_TOKEN OCIBUILD_PUSH_USERNAME=$GITHUB_ACTOR rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 ```
 
 ### Programmatic API (Erlang)
@@ -173,9 +173,8 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 | Option       | Short | Description                                   |
 |--------------|-------|-----------------------------------------------|
 | `--tag`      | `-t`  | Image tag, e.g., `myapp:1.0.0`                |
-| `--registry` | `-r`  | Registry for push, e.g., `ghcr.io`            |
 | `--output`   | `-o`  | Output tarball path (default: `<tag>.tar.gz`) |
-| `--push`     |       | Push to registry after build                  |
+| `--push`     | `-p`  | Push to registry, e.g., `ghcr.io/myorg`       |
 | `--base`     |       | Override base image                           |
 | `--release`  |       | Release name (if multiple configured)         |
 | `--cmd`      | `-c`  | Release start command (Elixir only)           |
@@ -191,7 +190,6 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 ```erlang
 {ocibuild, [
     {base_image, "debian:slim"},           % Base image (default: debian:slim)
-    {registry, "docker.io"},               % Default registry for --push
     {workdir, "/app"},                     % Working directory in container
     {env, #{                               % Environment variables
         ~"LANG" => ~"C.UTF-8"
@@ -214,15 +212,13 @@ def project do
     ocibuild: [
       base_image: "debian:slim",           # Base image (default: debian:slim)
       tag: "myapp:1.0.0",                  # Optional, defaults to app:version
-      registry: "ghcr.io/myorg",           # Default registry for --push
       workdir: "/app",                     # Working directory in container
       cmd: "start",                        # Release command (default: start)
       env: %{"LANG" => "C.UTF-8"},         # Environment variables
       expose: [8080, 443],                 # Ports to expose
       labels: %{                           # Image labels
         "org.opencontainers.image.source" => "https://github.com/..."
-      },
-      push: false                          # Auto-push (for release step)
+      }
     ]
   ]
 end

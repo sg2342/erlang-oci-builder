@@ -10,15 +10,14 @@ defmodule Mix.Tasks.Ocibuild do
 
   Or push directly to a registry:
 
-      MIX_ENV=prod mix ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
+      MIX_ENV=prod mix ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
 
   ## Options
 
     * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Defaults to release_name:version
-    * `-r, --registry` - Registry for push (e.g., ghcr.io)
     * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
     * `-c, --cmd` - Release start command (default: "start"). Use "daemon" for background
-    * `--push` - Push to registry after build
+    * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
     * `--base` - Override base image
     * `--release` - Release name (if multiple configured)
 
@@ -31,7 +30,6 @@ defmodule Mix.Tasks.Ocibuild do
           # ...
           ocibuild: [
             base_image: "debian:slim",
-            registry: "ghcr.io/myorg",
             workdir: "/app",
             env: %{"LANG" => "C.UTF-8"},
             expose: [8080],
@@ -62,12 +60,11 @@ defmodule Mix.Tasks.Ocibuild do
   def run(args) do
     {opts, _remaining, _invalid} =
       OptionParser.parse(args,
-        aliases: [t: :tag, r: :registry, o: :output, c: :cmd],
+        aliases: [t: :tag, p: :push, o: :output, c: :cmd],
         switches: [
           tag: :string,
-          registry: :string,
           output: :string,
-          push: :boolean,
+          push: :string,
           base: :string,
           release: :string,
           cmd: :string
@@ -187,8 +184,8 @@ defmodule Mix.Tasks.Ocibuild do
     end
   end
 
-  defp output_image(image, tag, opts, ocibuild_config) do
-    should_push = opts[:push] || false
+  defp output_image(image, tag, opts, _ocibuild_config) do
+    push_registry = opts[:push]
 
     # Determine output path
     output_path =
@@ -216,8 +213,8 @@ defmodule Mix.Tasks.Ocibuild do
       :ok ->
         Mix.shell().info("Image saved successfully")
 
-        if should_push do
-          push_image(image, tag, opts, ocibuild_config)
+        if push_registry do
+          push_image(image, tag, push_registry)
         else
           Mix.shell().info("\nTo load the image:\n  podman load < #{output_path}")
           :ok
@@ -228,14 +225,7 @@ defmodule Mix.Tasks.Ocibuild do
     end
   end
 
-  defp push_image(image, tag, opts, ocibuild_config) do
-    registry =
-      cond do
-        opts[:registry] -> opts[:registry]
-        Keyword.has_key?(ocibuild_config, :registry) -> Keyword.get(ocibuild_config, :registry)
-        true -> "docker.io"
-      end
-
+  defp push_image(image, tag, registry) do
     {repo, image_tag} = parse_tag(tag)
     auth = :ocibuild_rebar3.get_push_auth()
 

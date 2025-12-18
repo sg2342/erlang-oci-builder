@@ -3,27 +3,58 @@
 -moduledoc """
 Rebar3 provider for building OCI container images from releases.
 
-Usage:
+## Usage
+
 ```
+rebar3 release
 rebar3 ocibuild -t myapp:1.0.0
-rebar3 ocibuild -t myapp:1.0.0 --push -r ghcr.io/myorg
 ```
 
-Configuration in rebar.config:
+Or push directly to a registry:
+
+```
+rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
+```
+
+## Options
+
+  * `-t, --tag` - Image tag (e.g., myapp:1.0.0). Required.
+  * `-o, --output` - Output tarball path (default: <tag>.tar.gz)
+  * `-p, --push` - Push to registry (e.g., ghcr.io/myorg)
+  * `--base` - Override base image
+  * `--release` - Release name (if multiple configured)
+
+## Configuration
+
+Add to your `rebar.config`:
+
 ```
 {ocibuild, [
     {base_image, "debian:slim"},
-    {registry, "docker.io"},
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
-    {expose, [8080]}
+    {expose, [8080]},
+    {labels, #{}}
 ]}.
 ```
 
-Authentication via environment variables:
-- Push: OCIBUILD_PUSH_USERNAME/OCIBUILD_PUSH_PASSWORD (or OCIBUILD_PUSH_TOKEN)
-- Pull (optional): OCIBUILD_PULL_USERNAME/OCIBUILD_PULL_PASSWORD
-  If pull credentials are not set, anonymous pull is attempted (works for public images).
+## Authentication
+
+Set environment variables for registry authentication:
+
+For pushing to registry:
+
+```
+export OCIBUILD_PUSH_USERNAME="user"
+export OCIBUILD_PUSH_PASSWORD="pass"
+```
+
+For pulling private base images (optional, anonymous pull used if unset):
+
+```
+export OCIBUILD_PULL_USERNAME="user"
+export OCIBUILD_PULL_PASSWORD="pass"
+```
 """.
 
 %% Note: The provider behaviour is part of rebar3's internal API and is only
@@ -66,9 +97,8 @@ init(State) ->
             {example, "rebar3 ocibuild -t myapp:1.0.0"},
             {opts, [
                 {tag, $t, "tag", string, "Image tag (e.g., myapp:1.0.0)"},
-                {registry, $r, "registry", string, "Registry for push (e.g., ghcr.io)"},
                 {output, $o, "output", string, "Output tarball path"},
-                {push, undefined, "push", {boolean, false}, "Push to registry after build"},
+                {push, $p, "push", string, "Push to registry (e.g., ghcr.io/myorg)"},
                 {base, undefined, "base", string, "Override base image"},
                 {release, undefined, "release", string, "Release name (if multiple)"}
             ]},
@@ -256,7 +286,7 @@ get_base_image(Args, Config) ->
 
 %% @private Output the image (save and/or push)
 output_image(State, Args, Config, Tag, Image) ->
-    ShouldPush = proplists:get_value(push, Args, false),
+    PushRegistry = proplists:get_value(push, Args),
 
     %% Determine output path
     OutputPath =
@@ -285,28 +315,19 @@ output_image(State, Args, Config, Tag, Image) ->
             rebar_api:info("Image saved successfully", []),
 
             %% Push if requested
-            case ShouldPush of
-                true ->
-                    push_image(State, Args, Config, Tag, Image);
-                false ->
+            case PushRegistry of
+                undefined ->
                     rebar_api:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
-                    {ok, State}
+                    {ok, State};
+                _ ->
+                    push_image(State, Config, Tag, Image, list_to_binary(PushRegistry))
             end;
         {error, Reason} ->
             {error, {?MODULE, {save_failed, Reason}}}
     end.
 
 %% @private Push image to registry
-push_image(State, Args, Config, Tag, Image) ->
-    %% Get registry
-    Registry =
-        case proplists:get_value(registry, Args) of
-            undefined ->
-                proplists:get_value(registry, Config, ~"docker.io");
-            Reg ->
-                list_to_binary(Reg)
-        end,
-
+push_image(State, _Config, Tag, Image, Registry) ->
     %% Parse tag to get repository and tag parts
     {Repo, ImageTag} = parse_tag(Tag),
 
