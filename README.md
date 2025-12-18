@@ -9,15 +9,9 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 </p>
 
 <p align="center">
-<a href="https://github.com/intility/erlang-oci-builder/actions/workflows/ci.yaml">
-<img alt="CI" src="https://github.com/intility/erlang-oci-builder/actions/workflows/ci.yaml/badge.svg" style="max-width:100%;" />
-</a>
-<a href="https://hex.pm/packages/ocibuild">
-<img alt="hex.pm" src="https://img.shields.io/hexpm/v/ocibuild.svg" style="max-width:100%;" />
-</a>
-<a href="https://github.com/intility/erlang-oci-builder/blob/main/LICENSE">
-<img alt="license" src="https://img.shields.io/badge/license-MIT-blue" style="max-width:100%;" />
-</a>
+<a href="https://github.com/intility/erlang-oci-builder/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/intility/erlang-oci-builder/actions/workflows/ci.yaml/badge.svg"/></a>
+<a href="https://hex.pm/packages/ocibuild"><img alt="hex.pm" src="https://img.shields.io/hexpm/v/ocibuild.svg"/></a>
+<a href="https://github.com/intility/erlang-oci-builder/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue"/></a>
 </p>
 
 ## Features
