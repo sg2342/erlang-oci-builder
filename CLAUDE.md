@@ -30,25 +30,31 @@ rebar3 fmt -w
 ## Architecture
 
 ```
-ocibuild.erl              → Public API (from, copy, push, save, etc.)
-ocibuild_rebar3.erl       → Rebar3 provider (rebar3 ocibuild command)
-Mix.Tasks.Ocibuild        → Mix task (mix ocibuild command) [Elixir]
-Ocibuild.MixRelease       → Mix release step integration [Elixir]
-ocibuild_tar.erl          → In-memory TAR builder (POSIX ustar, custom implementation)
-ocibuild_layer.erl    → Creates OCI layers (tar + gzip + SHA256)
-ocibuild_digest.erl   → SHA256 digest utilities
-ocibuild_json.erl     → JSON encode/decode (OTP 27 native + fallback for OTP 25+)
-ocibuild_manifest.erl → OCI manifest generation
-ocibuild_layout.erl   → Export to directory or tarball
-ocibuild_registry.erl → Registry HTTP client (pull/push)
+src/
+├── ocibuild.erl          → Public API (from, copy, push, save, annotation, etc.)
+├── ocibuild_rebar3.erl   → Rebar3 provider (rebar3 ocibuild command)
+├── ocibuild_release.erl  → Shared release handling for rebar3/Mix
+├── ocibuild_tar.erl      → In-memory TAR builder (POSIX ustar format)
+├── ocibuild_layer.erl    → OCI layer creation (tar + gzip + SHA256)
+├── ocibuild_digest.erl   → SHA256 digest utilities
+├── ocibuild_json.erl     → JSON encode/decode (OTP 27 native + fallback)
+├── ocibuild_manifest.erl → OCI manifest generation (with annotations support)
+├── ocibuild_layout.erl   → Export to directory or tarball
+├── ocibuild_registry.erl → Registry HTTP client (pull/push with retry)
+└── ocibuild_cache.erl    → Layer caching for base images
+
+lib/
+├── mix/tasks/ocibuild.ex → Mix task (mix ocibuild command)
+└── ocibuild/mix_release.ex → Mix release step integration
 ```
 
 **Data Flow:**
 ```
 User API (ocibuild.erl)
-    ├─► ocibuild_registry.erl ──► Pull base image manifest + config
+    ├─► ocibuild_registry.erl ──► Pull base image manifest + config + layers
+    │       └─► ocibuild_cache.erl ──► Cache layers locally
     ├─► ocibuild_layer.erl ─────► Create layers (uses ocibuild_tar + zlib + ocibuild_digest)
-    ├─► ocibuild_manifest.erl ──► Generate manifest JSON
+    ├─► ocibuild_manifest.erl ──► Generate manifest JSON (with annotations)
     └─► ocibuild_layout.erl ────► Export to directory/tarball
         OR ocibuild_registry.erl ► Push to registry
 ```
@@ -59,74 +65,62 @@ User API (ocibuild.erl)
 2. **Two Digests per Layer**: OCI requires `digest` (compressed) for manifests and `diff_id` (uncompressed) for config.
 3. **OTP 27+ Target**: Uses native `json` module with fallback for OTP 25+.
 4. **Zero Dependencies**: Only OTP stdlib (crypto, zlib, inets, ssl).
+5. **Layer Caching**: Base image layers cached in `_build/ocibuild_cache/` for faster rebuilds.
 
 ## Current Status
 
-**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah).
+**Working:** tar creation, layer creation, JSON encoding, image configuration, OCI layout export, tarball export (compatible with `podman load`, skopeo, crane, buildah), registry pull/push (tested with GHCR), manifest annotations, layer caching, progress reporting.
 
-**Untested:** Registry pull/push, Docker Hub token auth, GHCR/other registry auth.
+**Not Implemented:** Multi-platform images, chunked uploads for very large layers, zstd compression.
 
-**Not Implemented:** Multi-platform images, layer caching, downloading base image layers (only metadata), chunked uploads, zstd compression.
+## CLI Reference
 
-## Rebar3 Provider
+Both `rebar3 ocibuild` and `mix ocibuild` support:
 
-Build OCI images directly from releases:
+| Option       | Short | Description                                   |
+|--------------|-------|-----------------------------------------------|
+| `--tag`      | `-t`  | Image tag, e.g., `myapp:1.0.0`                |
+| `--output`   | `-o`  | Output tarball path (default: `<tag>.tar.gz`) |
+| `--push`     | `-p`  | Push to registry, e.g., `ghcr.io/myorg`       |
+| `--desc`     | `-d`  | Image description (OCI manifest annotation)   |
+| `--base`     |       | Override base image                           |
+| `--release`  |       | Release name (if multiple configured)         |
+| `--cmd`      | `-c`  | Release start command (Elixir only)           |
 
-```bash
-# Build release and create OCI image
-rebar3 ocibuild -t myapp:1.0.0
+Whenever updating the CLI, remember to update the `src/ocibuild_rebar3.erl`, `lib/ocibuild/mix_release.ex` and `lib/mix/tasks/ocibuild.ex` 
+files to support the new functionality.
 
-# Build and push to registry
-rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
+## Configuration
 
-# Custom base image
-rebar3 ocibuild -t myapp:1.0.0 --base erlang:27-alpine
-```
+### rebar.config (Erlang)
 
-Configuration in `rebar.config`:
 ```erlang
 {ocibuild, [
     {base_image, "debian:slim"},
     {workdir, "/app"},
     {env, #{<<"LANG">> => <<"C.UTF-8">>}},
     {expose, [8080]},
-    {labels, #{<<"org.opencontainers.image.source">> => <<"...">>}}
+    {labels, #{<<"org.opencontainers.image.source">> => <<"...">>}},
+    {description, "My application"}
 ]}.
 ```
 
-Auth via environment:
-- Push: `OCIBUILD_PUSH_USERNAME`/`OCIBUILD_PUSH_PASSWORD` (or `OCIBUILD_PUSH_TOKEN`)
-- Pull (optional): `OCIBUILD_PULL_USERNAME`/`OCIBUILD_PULL_PASSWORD` (anonymous if unset)
+### mix.exs (Elixir)
 
-## Mix Task (Elixir)
-
-Build OCI images from Mix releases:
-
-```bash
-# Build release and create OCI image
-MIX_ENV=prod mix release
-MIX_ENV=prod mix ocibuild -t myapp:1.0.0
-
-# Push to registry
-MIX_ENV=prod mix ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
-```
-
-Configuration in `mix.exs`:
 ```elixir
 def project do
   [
     ocibuild: [
       base_image: "debian:slim",
       env: %{"LANG" => "C.UTF-8"},
-      expose: [8080]
+      expose: [8080],
+      description: "My application"
     ]
   ]
 end
 ```
 
-### Automatic Release Step
-
-Add to release `:steps` for automatic OCI image building:
+### Automatic Release Step (Elixir)
 
 ```elixir
 releases: [
@@ -136,7 +130,58 @@ releases: [
 ]
 ```
 
+## Authentication
+
+Environment variables:
+- Push: `OCIBUILD_PUSH_USERNAME`/`OCIBUILD_PUSH_PASSWORD` or `OCIBUILD_PUSH_TOKEN`
+- Pull (optional): `OCIBUILD_PULL_USERNAME`/`OCIBUILD_PULL_PASSWORD` or `OCIBUILD_PULL_TOKEN`
+
+## Key Types (from ocibuild.erl)
+
+```erlang
+-opaque image() :: #{
+    base := base_ref() | none,
+    base_manifest => map(),
+    base_config => map(),
+    auth => auth() | #{},
+    layers := [layer()],
+    config := map(),
+    annotations => map()    % OCI manifest annotations
+}.
+
+-type layer() :: #{
+    media_type := binary(),
+    digest := binary(),      % sha256:... of compressed data
+    diff_id := binary(),     % sha256:... of uncompressed tar
+    size := non_neg_integer(),
+    data := binary()
+}.
+```
+
+## Public API (ocibuild.erl)
+
+| Function | Description |
+|----------|-------------|
+| `from/1`, `from/2`, `from/3` | Start from base image |
+| `scratch/0` | Start from empty image |
+| `add_layer/2` | Add layer with file modes |
+| `copy/3` | Copy files to destination |
+| `entrypoint/2` | Set entrypoint |
+| `cmd/2` | Set CMD |
+| `env/2` | Set environment variables |
+| `workdir/2` | Set working directory |
+| `expose/2` | Expose port |
+| `label/3` | Add config label |
+| `user/2` | Set user |
+| `annotation/3` | Add manifest annotation |
+| `push/3`, `push/4` | Push to registry |
+| `save/2`, `save/3` | Save as tarball |
+| `export/2` | Export as directory |
+
 ## Common Development Tasks
+
+When building new important features or doing major changes to existing functionality,
+always update `CLAUDE.md` and `AGENTS.md` to reflect the new reality.
 
 ### Add a new image configuration option
 
@@ -158,29 +203,9 @@ file:write_file("/tmp/test.tar", Tar).
 {ok, Image} = ocibuild:from(<<"alpine:3.19">>).
 ```
 
-## Key Types (from ocibuild.erl)
-
-```erlang
--opaque image() :: #{
-    base := base_ref() | none,
-    base_manifest => map(),
-    base_config => map(),
-    layers := [layer()],
-    config := map()
-}.
-
--type layer() :: #{
-    media_type := binary(),
-    digest := binary(),      % sha256:... of compressed data
-    diff_id := binary(),     % sha256:... of uncompressed tar
-    size := non_neg_integer(),
-    data := binary()
-}.
-```
-
 ## Files to Read First
 
-1. `DEVELOPMENT.md` - Comprehensive development guide with OCI spec details
+1. `AGENTS.md` - Comprehensive development guide with OCI spec details
 2. `src/ocibuild.erl` - Public API
 3. `src/ocibuild_tar.erl` - Core tar implementation
 4. `test/ocibuild_tests.erl` - Usage examples
