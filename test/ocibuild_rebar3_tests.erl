@@ -270,13 +270,13 @@ format_progress_zero_total_test() ->
 %%%===================================================================
 
 to_binary_binary_test() ->
-    ?assertEqual(~"test", ocibuild_rebar3:to_binary(~"test")).
+    ?assertEqual(~"test", ocibuild_release:to_binary(~"test")).
 
 to_binary_list_test() ->
-    ?assertEqual(~"hello", ocibuild_rebar3:to_binary("hello")).
+    ?assertEqual(~"hello", ocibuild_release:to_binary("hello")).
 
 to_binary_atom_test() ->
-    ?assertEqual(~"myatom", ocibuild_rebar3:to_binary(myatom)).
+    ?assertEqual(~"myatom", ocibuild_release:to_binary(myatom)).
 
 %%%===================================================================
 %%% parse_tag tests (using exported function)
@@ -341,12 +341,12 @@ get_push_auth_password_only_test() ->
 %%%===================================================================
 
 to_container_path_simple_test() ->
-    ?assertEqual(~"/app/bin/myapp", ocibuild_rebar3:to_container_path("bin/myapp")).
+    ?assertEqual(~"/app/bin/myapp", ocibuild_release:to_container_path("bin/myapp")).
 
 to_container_path_nested_test() ->
     ?assertEqual(
         ~"/app/lib/myapp/ebin/myapp.beam",
-        ocibuild_rebar3:to_container_path("lib/myapp/ebin/myapp.beam")
+        ocibuild_release:to_container_path("lib/myapp/ebin/myapp.beam")
     ).
 
 %%%===================================================================
@@ -360,20 +360,20 @@ get_file_mode_test() ->
         FilePath = filename:join(TmpDir, "test.txt"),
         ok = file:write_file(FilePath, <<"test">>),
         ok = file:change_mode(FilePath, 8#644),
-        ?assertEqual(8#644, ocibuild_rebar3:get_file_mode(FilePath)),
+        ?assertEqual(8#644, ocibuild_release:get_file_mode(FilePath)),
 
         %% Create executable
         ExePath = filename:join(TmpDir, "test.sh"),
         ok = file:write_file(ExePath, <<"#!/bin/sh">>),
         ok = file:change_mode(ExePath, 8#755),
-        ?assertEqual(8#755, ocibuild_rebar3:get_file_mode(ExePath))
+        ?assertEqual(8#755, ocibuild_release:get_file_mode(ExePath))
     after
         cleanup_temp_dir(TmpDir)
     end.
 
 get_file_mode_nonexistent_test() ->
     %% Non-existent file should return default mode
-    ?assertEqual(8#644, ocibuild_rebar3:get_file_mode("/nonexistent/path")).
+    ?assertEqual(8#644, ocibuild_release:get_file_mode("/nonexistent/path")).
 
 %%%===================================================================
 %%% strip_prefix tests
@@ -381,27 +381,27 @@ get_file_mode_nonexistent_test() ->
 
 strip_prefix_simple_test() ->
     ?assertEqual(
-        "file.txt", ocibuild_rebar3:strip_prefix(["foo", "bar"], ["foo", "bar", "file.txt"])
+        "file.txt", ocibuild_release:strip_prefix(["foo", "bar"], ["foo", "bar", "file.txt"])
     ).
 
 strip_prefix_nested_test() ->
     ?assertEqual(
         filename:join(["a", "b", "c.txt"]),
-        ocibuild_rebar3:strip_prefix(["base"], ["base", "a", "b", "c.txt"])
+        ocibuild_release:strip_prefix(["base"], ["base", "a", "b", "c.txt"])
     ).
 
 strip_prefix_no_match_test() ->
     %% If no match, return full path
     ?assertEqual(
         filename:join(["other", "path"]),
-        ocibuild_rebar3:strip_prefix(["foo"], ["other", "path"])
+        ocibuild_release:strip_prefix(["foo"], ["other", "path"])
     ).
 
 strip_prefix_partial_match_test() ->
     %% When paths diverge, return remaining from full path
     ?assertEqual(
         filename:join(["x", "y"]),
-        ocibuild_rebar3:strip_prefix(["a", "b"], ["a", "x", "y"])
+        ocibuild_release:strip_prefix(["a", "b"], ["a", "x", "y"])
     ).
 
 %%%===================================================================
@@ -456,13 +456,13 @@ get_base_image_default_test() ->
 
 make_relative_path_simple_test() ->
     ?assertEqual(
-        "file.txt", ocibuild_rebar3:make_relative_path("/base/path", "/base/path/file.txt")
+        "file.txt", ocibuild_release:make_relative_path("/base/path", "/base/path/file.txt")
     ).
 
 make_relative_path_nested_test() ->
     ?assertEqual(
         filename:join(["a", "b", "c.txt"]),
-        ocibuild_rebar3:make_relative_path("/base", "/base/a/b/c.txt")
+        ocibuild_release:make_relative_path("/base", "/base/a/b/c.txt")
     ).
 
 %%%===================================================================
@@ -543,6 +543,139 @@ make_progress_callback_test() ->
 
     %% Test with unknown total
     ok = Callback(#{phase => manifest, bytes_received => 100, total_bytes => unknown}).
+
+%%%===================================================================
+%%% Symlink security tests
+%%%===================================================================
+
+collect_symlink_inside_release_test() ->
+    TmpDir = make_temp_dir("ocibuild_symlink_inside"),
+    try
+        %% Create a file and a symlink pointing to it (within release)
+        BinDir = filename:join(TmpDir, "bin"),
+        ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
+
+        TargetPath = filename:join(BinDir, "real_file"),
+        ok = file:write_file(TargetPath, <<"real content">>),
+
+        SymlinkPath = filename:join(BinDir, "link_to_file"),
+        ok = file:make_symlink("real_file", SymlinkPath),
+
+        %% Should successfully collect both files
+        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        ?assertEqual(2, length(Files)),
+
+        %% Symlink should resolve to the same content
+        LinkFile = lists:keyfind(~"/app/bin/link_to_file", 1, Files),
+        ?assertNotEqual(false, LinkFile),
+        {_, Content, _} = LinkFile,
+        ?assertEqual(<<"real content">>, Content)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+collect_symlink_outside_release_test() ->
+    TmpDir = make_temp_dir("ocibuild_symlink_outside"),
+    try
+        %% Create a symlink pointing outside the release directory
+        BinDir = filename:join(TmpDir, "bin"),
+        ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
+
+        %% Create a regular file
+        RegularPath = filename:join(BinDir, "regular"),
+        ok = file:write_file(RegularPath, <<"regular content">>),
+
+        %% Create a symlink pointing to /etc/passwd (outside release)
+        SymlinkPath = filename:join(BinDir, "evil_link"),
+        ok = file:make_symlink("/etc/passwd", SymlinkPath),
+
+        %% Should collect only the regular file, not the symlink
+        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        ?assertEqual(1, length(Files)),
+
+        %% The evil symlink should not be present
+        EvilFile = lists:keyfind(~"/app/bin/evil_link", 1, Files),
+        ?assertEqual(false, EvilFile)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+collect_symlink_relative_escape_test() ->
+    TmpDir = make_temp_dir("ocibuild_symlink_escape"),
+    try
+        %% Create a symlink using relative path to escape release directory
+        BinDir = filename:join(TmpDir, "bin"),
+        ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
+
+        %% Create a regular file
+        RegularPath = filename:join(BinDir, "regular"),
+        ok = file:write_file(RegularPath, <<"regular content">>),
+
+        %% Create a symlink using ../../.. to escape
+        SymlinkPath = filename:join(BinDir, "escape_link"),
+        ok = file:make_symlink("../../../etc/passwd", SymlinkPath),
+
+        %% Should collect only the regular file
+        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        ?assertEqual(1, length(Files)),
+
+        %% The escape symlink should not be present
+        EscapeFile = lists:keyfind(~"/app/bin/escape_link", 1, Files),
+        ?assertEqual(false, EscapeFile)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+collect_broken_symlink_test() ->
+    TmpDir = make_temp_dir("ocibuild_symlink_broken"),
+    try
+        %% Create a broken symlink (target doesn't exist)
+        BinDir = filename:join(TmpDir, "bin"),
+        ok = filelib:ensure_dir(filename:join(BinDir, "placeholder")),
+
+        %% Create a regular file
+        RegularPath = filename:join(BinDir, "regular"),
+        ok = file:write_file(RegularPath, <<"regular content">>),
+
+        %% Create a broken symlink
+        SymlinkPath = filename:join(BinDir, "broken_link"),
+        ok = file:make_symlink("nonexistent_file", SymlinkPath),
+
+        %% Should collect only the regular file
+        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+        ?assertEqual(1, length(Files))
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
+
+collect_symlink_to_dir_inside_test() ->
+    TmpDir = make_temp_dir("ocibuild_symlink_dir"),
+    try
+        %% Create a directory with a file, and a symlink to that directory
+        RealDir = filename:join(TmpDir, "real_dir"),
+        ok = filelib:ensure_dir(filename:join(RealDir, "placeholder")),
+
+        FilePath = filename:join(RealDir, "file.txt"),
+        ok = file:write_file(FilePath, <<"file in real dir">>),
+
+        %% Create symlink to directory (within release)
+        SymlinkPath = filename:join(TmpDir, "link_dir"),
+        ok = file:make_symlink("real_dir", SymlinkPath),
+
+        %% Should collect files from both the real dir and via the symlink
+        {ok, Files} = ocibuild_rebar3:collect_release_files(TmpDir),
+
+        %% Should have 2 files (same file accessible via two paths)
+        ?assertEqual(2, length(Files)),
+
+        %% Both paths should have the same content
+        RealFile = lists:keyfind(~"/app/real_dir/file.txt", 1, Files),
+        LinkFile = lists:keyfind(~"/app/link_dir/file.txt", 1, Files),
+        ?assertNotEqual(false, RealFile),
+        ?assertNotEqual(false, LinkFile)
+    after
+        cleanup_temp_dir(TmpDir)
+    end.
 
 %%%===================================================================
 %%% Test fixtures

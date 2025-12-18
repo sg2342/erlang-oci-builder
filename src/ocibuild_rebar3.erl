@@ -32,14 +32,15 @@ Authentication via environment variables:
 -behaviour(provider).
 
 -export([init/1, do/1, format_error/1]).
+
 %% Exported for use by Mix task (Elixir integration)
+%% These delegate to ocibuild_release but are kept for backward compatibility
 -export([collect_release_files/1, build_image/7, build_image/8, get_push_auth/0, get_pull_auth/0]).
 
 %% Exports for testing
 -ifdef(TEST).
--export([format_bytes/1, format_progress/2, to_binary/1, parse_tag/1]).
--export([to_container_path/1, get_file_mode/1, strip_prefix/2, find_relx_release/1]).
--export([get_base_image/2, make_relative_path/2, make_progress_callback/0]).
+-export([format_bytes/1, format_progress/2, parse_tag/1]).
+-export([find_relx_release/1, get_base_image/2, make_progress_callback/0]).
 -endif.
 
 -define(PROVIDER, ocibuild).
@@ -107,6 +108,52 @@ format_error({base_image_failed, Reason}) ->
     io_lib:format("Failed to fetch base image: ~p", [Reason]);
 format_error(Reason) ->
     io_lib:format("OCI build error: ~p", [Reason]).
+
+%%%===================================================================
+%%% Delegated API (for backward compatibility with Mix tasks)
+%%%===================================================================
+
+-doc "Collect all files from a release directory. Delegates to ocibuild_release.".
+-spec collect_release_files(file:filename()) ->
+    {ok, [{binary(), binary(), non_neg_integer()}]} | {error, term()}.
+collect_release_files(ReleasePath) ->
+    ocibuild_release:collect_release_files(ReleasePath).
+
+-doc "Build an OCI image from release files. Delegates to ocibuild_release.".
+-spec build_image(
+    binary(),
+    [{binary(), binary(), non_neg_integer()}],
+    string() | binary(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map()
+) -> {ok, ocibuild:image()} | {error, term()}.
+build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
+    build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, ~"foreground").
+
+-doc "Build an OCI image from release files with custom start command. Delegates to ocibuild_release.".
+-spec build_image(
+    binary(),
+    [{binary(), binary(), non_neg_integer()}],
+    string() | binary(),
+    binary(),
+    map(),
+    [non_neg_integer()],
+    map(),
+    binary()
+) -> {ok, ocibuild:image()} | {error, term()}.
+build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd) ->
+    %% Create progress callback for terminal display
+    ProgressFn = make_progress_callback(),
+    PullAuth = get_pull_auth(),
+    Opts = #{auth => PullAuth, progress => ProgressFn},
+    Result = ocibuild_release:build_image(
+        BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts
+    ),
+    %% Clear progress line after build
+    io:format("\r\e[K"),
+    Result.
 
 %%%===================================================================
 %%% Internal functions
@@ -179,89 +226,6 @@ find_relx_release([{release, {Name, _Vsn}, _Apps, _Opts} | _]) ->
 find_relx_release([_ | Rest]) ->
     find_relx_release(Rest).
 
-%% @private Collect all files from release directory
--spec collect_release_files(file:filename()) ->
-    {ok, [{binary(), binary(), non_neg_integer()}]} | {error, term()}.
-collect_release_files(ReleasePath) ->
-    try
-        Files = collect_files_recursive(ReleasePath, ReleasePath),
-        {ok, Files}
-    catch
-        {file_error, Path, Reason} ->
-            {error, {file_read_error, Path, Reason}}
-    end.
-
-%% @private Recursively collect files
-collect_files_recursive(BasePath, CurrentPath) ->
-    case file:list_dir(CurrentPath) of
-        {ok, Entries} ->
-            lists:flatmap(
-                fun(Entry) ->
-                    FullPath = filename:join(CurrentPath, Entry),
-                    case filelib:is_dir(FullPath) of
-                        true ->
-                            collect_files_recursive(BasePath, FullPath);
-                        false ->
-                            [collect_single_file(BasePath, FullPath)]
-                    end
-                end,
-                Entries
-            );
-        {error, Reason} ->
-            throw({file_error, CurrentPath, Reason})
-    end.
-
-%% @private Collect a single file with its container path and mode
-collect_single_file(BasePath, FilePath) ->
-    %% Get relative path from release root (cross-platform)
-    RelPath = make_relative_path(BasePath, FilePath),
-
-    %% Convert to container path with forward slashes
-    ContainerPath = to_container_path(RelPath),
-
-    %% Read file content
-    case file:read_file(FilePath) of
-        {ok, Content} ->
-            %% Get file permissions
-            Mode = get_file_mode(FilePath),
-            {ContainerPath, Content, Mode};
-        {error, Reason} ->
-            throw({file_error, FilePath, Reason})
-    end.
-
-%% @private Make a path relative to a base path (cross-platform)
-make_relative_path(BasePath, FullPath) ->
-    %% Normalize both paths to use consistent separators
-    BaseNorm = filename:split(BasePath),
-    FullNorm = filename:split(FullPath),
-    %% Remove the base prefix from the full path
-    strip_prefix(BaseNorm, FullNorm).
-
-strip_prefix([H | T1], [H | T2]) ->
-    strip_prefix(T1, T2);
-strip_prefix([], Remaining) ->
-    filename:join(Remaining);
-strip_prefix(_, FullPath) ->
-    filename:join(FullPath).
-
-%% @private Convert a local path to a container path (always forward slashes)
-to_container_path(RelPath) ->
-    %% Split and rejoin with forward slashes for container
-    Parts = filename:split(RelPath),
-    UnixPath = string:join(Parts, "/"),
-    list_to_binary("/app/" ++ UnixPath).
-
-%% @private Get file mode (permissions)
-get_file_mode(FilePath) ->
-    case file:read_file_info(FilePath) of
-        {ok, FileInfo} ->
-            %% Extract permission bits (rwxrwxrwx)
-            element(8, FileInfo) band 8#777;
-        {error, _} ->
-            %% Default to readable file
-            8#644
-    end.
-
 %% @private Build image and output
 build_and_output(State, Args, Config, Tag, ReleaseName, Files) ->
     %% Get configuration options
@@ -288,100 +252,6 @@ get_base_image(Args, Config) ->
             proplists:get_value(base_image, Config, ?DEFAULT_BASE_IMAGE);
         Base ->
             list_to_binary(Base)
-    end.
-
-%% @private Build the OCI image (defaults to 'foreground' command for Erlang releases)
--spec build_image(
-    binary(),
-    [{binary(), binary(), non_neg_integer()}],
-    string() | binary(),
-    binary(),
-    map(),
-    [non_neg_integer()],
-    map()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels) ->
-    build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, ~"foreground").
-
-%% @private Build the OCI image with custom start command
-%% Cmd is the release command: "foreground" for Erlang, "start" for Elixir
--spec build_image(
-    binary(),
-    [{binary(), binary(), non_neg_integer()}],
-    string() | binary(),
-    binary(),
-    map(),
-    [non_neg_integer()],
-    map(),
-    binary()
-) -> {ok, ocibuild:image()} | {error, term()}.
-build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd) ->
-    try
-        %% Start from base image or scratch
-        Image0 =
-            case BaseImage of
-                ~"scratch" ->
-                    {ok, Img} = ocibuild:scratch(),
-                    Img;
-                _ ->
-                    %% Create progress callback for download
-                    ProgressFn = make_progress_callback(),
-                    Opts = #{progress => ProgressFn},
-                    PullAuth = get_pull_auth(),
-                    case ocibuild:from(BaseImage, PullAuth, Opts) of
-                        {ok, Img} ->
-                            %% Clear progress line
-                            io:format("\r\e[K"),
-                            Img;
-                        {error, FromErr} ->
-                            io:format("\r\e[K"),
-                            throw({base_image_failed, FromErr})
-                    end
-            end,
-
-        %% Add release files as a layer
-        Image1 = ocibuild:add_layer(Image0, Files),
-
-        %% Set working directory
-        Image2 = ocibuild:workdir(Image1, to_binary(Workdir)),
-
-        %% Set entrypoint and clear inherited Cmd from base image
-        ReleaseNameBin = list_to_binary(ReleaseName),
-        CmdBin = to_binary(Cmd),
-        Entrypoint = [<<"/app/bin/", ReleaseNameBin/binary>>, CmdBin],
-        Image3a = ocibuild:entrypoint(Image2, Entrypoint),
-        %% Clear Cmd to prevent base image's Cmd (e.g., "iex") from being appended
-        Image3 = ocibuild:cmd(Image3a, []),
-
-        %% Set environment variables
-        Image4 =
-            case map_size(EnvMap) of
-                0 ->
-                    Image3;
-                _ ->
-                    ocibuild:env(Image3, EnvMap)
-            end,
-
-        %% Expose ports
-        Image5 =
-            lists:foldl(fun(Port, Img) -> ocibuild:expose(Img, Port) end, Image4, ExposePorts),
-
-        %% Add labels
-        Image6 =
-            maps:fold(
-                fun(Key, Value, Img) -> ocibuild:label(Img, to_binary(Key), to_binary(Value)) end,
-                Image5,
-                Labels
-            ),
-
-        {ok, Image6}
-    catch
-        throw:Reason ->
-            {error, Reason};
-        error:Reason:Stacktrace ->
-            {error, {Reason, Stacktrace}};
-        exit:Reason ->
-            {error, {exit, Reason}}
     end.
 
 %% @private Output the image (save and/or push)
@@ -495,14 +365,6 @@ get_pull_auth() ->
         Token ->
             #{token => list_to_binary(Token)}
     end.
-
-%% @private Convert to binary if needed
-to_binary(Bin) when is_binary(Bin) ->
-    Bin;
-to_binary(List) when is_list(List) ->
-    list_to_binary(List);
-to_binary(Atom) when is_atom(Atom) ->
-    atom_to_binary(Atom, utf8).
 
 %% @private Create a progress callback for terminal display
 make_progress_callback() ->

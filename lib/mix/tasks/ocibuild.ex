@@ -133,13 +133,16 @@ defmodule Mix.Tasks.Ocibuild do
     Mix.shell().info("Building OCI image: #{tag}")
     Mix.shell().info("  Base image: #{base_image}")
 
-    # Collect release files using Erlang function
-    case :ocibuild_rebar3.collect_release_files(to_charlist(release_path)) do
+    # Collect release files using shared release module
+    case :ocibuild_release.collect_release_files(to_charlist(release_path)) do
       {:ok, files} ->
         Mix.shell().info("  Collected #{length(files)} files from release")
 
         # Build image with Elixir-appropriate start command
-        case :ocibuild_rebar3.build_image(
+        pull_auth = :ocibuild_rebar3.get_pull_auth()
+        build_opts = %{auth: pull_auth}
+
+        case :ocibuild_release.build_image(
                to_binary(base_image),
                files,
                to_charlist(release_name),
@@ -147,7 +150,8 @@ defmodule Mix.Tasks.Ocibuild do
                env_map,
                expose_ports,
                labels,
-               to_binary(cmd)
+               to_binary(cmd),
+               build_opts
              ) do
           {:ok, image} ->
             output_image(image, tag, opts, ocibuild_config)
