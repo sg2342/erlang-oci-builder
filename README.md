@@ -1,7 +1,7 @@
-<h1 align="center">
-  <img src="logo.png" width="124px"/><br/>
-  Build and Publish OCI Container Images
-</h1>
+<div align="center">
+  <img src="assets/logo.png" height="124px">
+  <h1 align="center">Build and Publish OCI Container Images</h1>
+</div>
 
 <p align="center">
 <code>ocibuild</code> is an Erlang library for building <a href="https://opencontainers.org/">OCI-compliant</a> container images. 
