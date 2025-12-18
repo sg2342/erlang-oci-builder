@@ -230,11 +230,7 @@ get_or_download_layer(Registry, Repo, Digest, Auth, Size, Index, TotalLayers) ->
                             ok;
                         {error, CacheErr} ->
                             %% Log but don't fail - caching is best-effort
-                            io:format(
-                                standard_error,
-                                "  Warning: Failed to cache layer: ~p~n",
-                                [CacheErr]
-                            )
+                            logger:warning("Failed to cache layer ~s: ~p", [Digest, CacheErr])
                     end,
                     CompressedData;
                 {error, Reason} ->

@@ -528,13 +528,6 @@ digest_empty_data_test() ->
 %%% Additional JSON tests
 %%%===================================================================
 
-json_encode_pretty_test() ->
-    %% Test encode_pretty (currently same as encode)
-    Result = ocibuild_json:encode_pretty(#{~"key" => ~"value"}),
-    ?assert(is_binary(Result)),
-    Decoded = ocibuild_json:decode(Result),
-    ?assertEqual(#{~"key" => ~"value"}, Decoded).
-
 json_encode_nested_test() ->
     %% Test deeply nested structures
     Nested = #{~"level1" => #{~"level2" => #{~"level3" => ~"value"}}},

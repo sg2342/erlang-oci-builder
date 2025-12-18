@@ -22,6 +22,15 @@ Image3 = ocibuild:env(Image2, #{<<"MIX_ENV">> => <<"prod">>}),
 Auth = #{username => <<"github-username">>, password => <<"github-token">>},
 ok = ocibuild:push(Image3, <<"ghcr.io">>, <<"myorg/myapp:v1">>, Auth).
 ```
+
+# Memory Requirements
+
+This library processes layers entirely in memory. Ensure your VM has
+sufficient memory to hold your release files, compressed layer data, and
+any downloaded base image layers. As a rule of thumb, allocate at least
+2x your release size plus base image layers. For very large images (>1 GB),
+consider breaking content into multiple smaller layers or increasing VM
+memory limits.
 """.
 
 %% API - Building images

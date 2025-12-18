@@ -266,6 +266,22 @@ ocibuild:push(Image, ~"docker.io", ~"myuser/myapp:latest", Auth).
 4. **Generating OCI config and manifest** JSON
 5. **Pushing blobs and manifest** to the target registry
 
+### Memory Requirements
+
+`ocibuild` processes layers entirely in memory for simplicity and performance.
+This means your VM needs sufficient memory to hold:
+
+- **Your release files** (typically 20-100 MB for BEAM applications)
+- **Compressed layer data** (gzip typically achieves 2-4x compression)
+- **Base image layers** when downloading (cached after first download)
+
+**Rule of thumb:** Allocate at least 2x your release size plus base image layers.
+For a typical 50 MB release with a 30 MB base image, ensure ~200 MB available memory.
+
+For very large images (>1 GB), consider:
+- Breaking into multiple smaller layers
+- Increasing VM memory limits (`+MBas` in `vm.args`)
+
 ## Choosing a Base Image
 
 `ocibuild` is a build-time tool that creates OCI layers — it doesn't have a container runtime, 

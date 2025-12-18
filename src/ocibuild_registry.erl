@@ -370,11 +370,9 @@ get_target_platform() ->
             Arch0 when is_list(Arch0) ->
                 normalize_arch(list_to_binary(Arch0));
             Other ->
-                io:format(
-                    standard_error,
-                    "Warning: Could not detect system architecture (~p), defaulting to amd64~n",
-                    [Other]
-                ),
+                logger:warning("Could not detect system architecture (~p), defaulting to amd64", [
+                    Other
+                ]),
                 ~"amd64"
         end,
     {Os, Arch}.
@@ -537,7 +535,7 @@ use_wellknown_token_endpoint(~"ghcr.io", _Repo, #{}) ->
     {ok, none};
 use_wellknown_token_endpoint(~"quay.io", Repo, Auth) ->
     %% Quay.io token endpoint
-    Challenge = #{realm => "https://quay.io/v2/auth", service => "quay.io"},
+    Challenge = #{~"realm" => "https://quay.io/v2/auth", ~"service" => "quay.io"},
     exchange_token(Challenge, Repo, Auth);
 use_wellknown_token_endpoint(Registry, _Repo, _Auth) ->
     %% Unknown registry - can't get token without WWW-Authenticate
@@ -554,9 +552,9 @@ get_www_authenticate([{Key, Value} | Rest]) ->
     end.
 
 %% Parse WWW-Authenticate header
-%% Returns {bearer, #{realm => ..., service => ...}} | basic | unknown
+%% Returns {bearer, #{<<"realm">> => ..., <<"service">> => ...}} | basic | unknown
 -spec parse_www_authenticate(string()) ->
-    {bearer, #{realm := string(), service => string()}} | basic | unknown.
+    {bearer, #{binary() := string()}} | basic | unknown.
 parse_www_authenticate(Header) ->
     %% Normalize to lowercase for scheme comparison
     case string:prefix(string:lowercase(Header), "bearer ") of
@@ -569,16 +567,17 @@ parse_www_authenticate(Header) ->
             %% Extract the params part (after "Bearer ")
             ParamsStr = string:slice(Header, 7),
             Params = parse_auth_params(ParamsStr),
-            case maps:find(realm, Params) of
+            case maps:find(~"realm", Params) of
                 {ok, Realm} ->
-                    {bearer, Params#{realm => Realm}};
+                    {bearer, Params#{~"realm" => Realm}};
                 error ->
                     unknown
             end
     end.
 
 %% Parse key="value" pairs from auth header
--spec parse_auth_params(string()) -> #{atom() => string()}.
+%% Uses binary keys to avoid atom table exhaustion from untrusted input
+-spec parse_auth_params(string()) -> #{binary() => string()}.
 parse_auth_params(Str) ->
     %% Split on comma, then parse each key="value" pair
     Parts = string:split(Str, ",", all),
@@ -594,11 +593,13 @@ parse_auth_params(Str) ->
     ).
 
 %% Parse a single key="value" pair
--spec parse_auth_param(string()) -> {atom(), string()} | error.
+%% Returns binary key to avoid atom exhaustion from untrusted HTTP headers
+-spec parse_auth_param(string()) -> {binary(), string()} | error.
 parse_auth_param(Str) ->
     case string:split(Str, "=", leading) of
         [KeyStr, ValueStr] ->
-            Key = list_to_atom(string:lowercase(string:trim(KeyStr))),
+            %% Use binary key instead of atom to prevent atom table exhaustion
+            Key = list_to_binary(string:lowercase(string:trim(KeyStr))),
             %% Remove surrounding quotes if present
             Value = string:trim(ValueStr, both, "\""),
             {Key, Value};
@@ -607,11 +608,11 @@ parse_auth_param(Str) ->
     end.
 
 %% Exchange credentials for a Bearer token at the realm URL
--spec exchange_token(#{realm := string(), atom() => string()}, binary(), map()) ->
+-spec exchange_token(#{binary() := string()}, binary(), map()) ->
     {ok, binary()} | {error, term()}.
-exchange_token(#{realm := Realm} = Challenge, Repo, Auth) ->
+exchange_token(#{~"realm" := Realm} = Challenge, Repo, Auth) ->
     %% Build token URL with query params
-    Service = maps:get(service, Challenge, ""),
+    Service = maps:get(~"service", Challenge, ""),
     Scope = "repository:" ++ binary_to_list(Repo) ++ ":pull,push",
 
     %% Build query string
@@ -1097,7 +1098,7 @@ maybe_report_progress(ProgressFn, Info) when is_function(ProgressFn, 1) ->
         ok
     catch
         _:_ ->
-            %% Ignore callback errors - operations should not fail due to progress reporting
+            %% Silently ignore callback errors to avoid disrupting progress display
             ok
     end.
 
