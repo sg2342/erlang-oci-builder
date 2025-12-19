@@ -43,7 +43,14 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to Hex.pm
-        uses: erlangpack/github-action@09d8fc9cc3563f04a128311d627c60dfadc75493 # v3
+      - name: Configure Hex authentication
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          mkdir -p ~/.config/rebar3
+          cat > ~/.config/rebar3/hex.config << EOF
+          {<<"hexpm">>, #{api_key => <<"$HEX_API_KEY">>, repo_key => <<"$HEX_API_KEY">>}}.
+          EOF
+
+      - name: Publish to Hex.pm
+        run: rebar3 hex publish --yes
