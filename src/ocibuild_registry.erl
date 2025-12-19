@@ -12,23 +12,28 @@ See: https://github.com/opencontainers/distribution-spec
 -export([
     pull_manifest/3, pull_manifest/4, pull_manifest/5,
     pull_blob/3, pull_blob/4, pull_blob/5,
-    push/5,
-    check_blob_exists/4
+    push/5, push/6,
+    check_blob_exists/4,
+    stop_httpc/0
 ]).
 
 %% Retry utilities (shared with ocibuild_layout)
 -export([is_retriable_error/1, with_retry/2]).
 
 %% Export internal HTTP functions (used via ?MODULE: for mockability in tests)
--export([http_get/2, http_head/2]).
+-export([http_get/2, http_head/2, http_post/3, http_patch/4, http_put/3, http_put/4]).
+
+%% Export internal functions for testing
+-export([push_blob/5, push_blob/6, format_content_range/2, parse_range_header/1]).
 
 %% Progress callback types
--type progress_phase() :: manifest | config | layer.
+-type progress_phase() :: manifest | config | layer | uploading.
 -type progress_info() :: #{
     phase := progress_phase(),
     layer_index => non_neg_integer(),
     total_layers => non_neg_integer(),
     bytes_received := non_neg_integer(),
+    bytes_sent => non_neg_integer(),
     total_bytes := non_neg_integer() | unknown
 }.
 -type progress_callback() :: fun((progress_info()) -> ok).
@@ -37,9 +42,26 @@ See: https://github.com/opencontainers/distribution-spec
     auth => map()
 }.
 
--export_type([progress_callback/0, progress_info/0, pull_opts/0]).
+%% Chunked upload types
+-type upload_session() :: #{
+    upload_url := string(),
+    bytes_uploaded := non_neg_integer()
+}.
+-type push_opts() :: #{
+    chunk_size => pos_integer(),
+    progress => progress_callback(),
+    layer_index => non_neg_integer(),
+    total_layers => non_neg_integer()
+}.
+
+-export_type([progress_callback/0, progress_info/0, pull_opts/0, push_opts/0, upload_session/0]).
 
 -define(DEFAULT_TIMEOUT, 30000).
+%% Default chunk size for chunked uploads: 5MB
+-define(DEFAULT_CHUNK_SIZE, 5 * 1024 * 1024).
+%% Stand-alone httpc profile for ocibuild (not supervised by inets)
+-define(HTTPC_PROFILE, ocibuild).
+-define(HTTPC_KEY, {?MODULE, httpc_pid}).
 %% Registry URL mappings
 -define(REGISTRY_URLS, #{
     ~"docker.io" => "https://registry-1.docker.io",
@@ -238,15 +260,21 @@ check_blob_exists(Registry, Repo, Digest, Auth) ->
 -doc "Push an image to a registry.".
 -spec push(ocibuild:image(), binary(), binary(), binary(), map()) -> ok | {error, term()}.
 push(Image, Registry, Repo, Tag, Auth) ->
+    push(Image, Registry, Repo, Tag, Auth, #{}).
+
+-doc "Push an image to a registry with options (supports chunked uploads).".
+-spec push(ocibuild:image(), binary(), binary(), binary(), map(), push_opts()) ->
+    ok | {error, term()}.
+push(Image, Registry, Repo, Tag, Auth, Opts) ->
     BaseUrl = registry_url(Registry),
     NormalizedRepo = normalize_repo(Registry, Repo),
 
     case get_auth_token(Registry, NormalizedRepo, Auth) of
         {ok, Token} ->
             %% Push layers
-            case push_layers(Image, BaseUrl, NormalizedRepo, Token) of
+            case push_layers(Image, BaseUrl, NormalizedRepo, Token, Opts) of
                 ok ->
-                    %% Push config
+                    %% Push config (no chunked upload needed - configs are small)
                     case push_config(Image, BaseUrl, NormalizedRepo, Token) of
                         {ok, ConfigDigest, ConfigSize} ->
                             %% Push manifest
@@ -474,7 +502,7 @@ discover_auth(Registry, Repo, Auth) ->
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
 
-    case httpc:request(get, Request, HttpOpts, Opts) of
+    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, 200, _}, RespHeaders, _}} ->
             %% Anonymous access allowed for /v2/, but push may still require auth
             %% If credentials provided, try to get a token anyway
@@ -679,31 +707,44 @@ auth_headers(Token) when is_binary(Token) ->
     [{"Authorization", "Bearer " ++ binary_to_list(Token)}].
 
 %% Push all layers (including base image layers)
--spec push_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
-push_layers(Image, BaseUrl, Repo, Token) ->
+-spec push_layers(ocibuild:image(), string(), binary(), binary(), push_opts()) ->
+    ok | {error, term()}.
+push_layers(Image, BaseUrl, Repo, Token, Opts) ->
     %% First push base image layers (if any) that don't already exist in target
-    case push_base_layers(Image, BaseUrl, Repo, Token) of
+    case push_base_layers(Image, BaseUrl, Repo, Token, Opts) of
         ok ->
             %% Then push our new layers
             Layers = maps:get(layers, Image, []),
             %% Layers are stored in reverse order, reverse for correct push order
-            lists:foldl(
-                fun
-                    (#{digest := Digest, data := Data}, ok) ->
-                        push_blob(BaseUrl, Repo, Digest, Data, Token);
-                    (_, {error, _} = Err) ->
-                        Err
-                end,
-                ok,
-                lists:reverse(Layers)
-            );
+            ReversedLayers = lists:reverse(Layers),
+            TotalLayers = length(ReversedLayers),
+            push_layers_with_index(ReversedLayers, BaseUrl, Repo, Token, Opts, 0, TotalLayers);
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Push layers with index tracking for progress
+-spec push_layers_with_index(
+    [map()], string(), binary(), binary(), push_opts(), non_neg_integer(), non_neg_integer()
+) ->
+    ok | {error, term()}.
+push_layers_with_index([], _BaseUrl, _Repo, _Token, _Opts, _Index, _Total) ->
+    ok;
+push_layers_with_index(
+    [#{digest := Digest, data := Data} | Rest], BaseUrl, Repo, Token, Opts, Index, Total
+) ->
+    LayerOpts = Opts#{layer_index => Index, total_layers => Total},
+    case push_blob(BaseUrl, Repo, Digest, Data, Token, LayerOpts) of
+        ok ->
+            push_layers_with_index(Rest, BaseUrl, Repo, Token, Opts, Index + 1, Total);
         {error, _} = Err ->
             Err
     end.
 
 %% Push base image layers to target registry
--spec push_base_layers(ocibuild:image(), string(), binary(), binary()) -> ok | {error, term()}.
-push_base_layers(Image, BaseUrl, Repo, Token) ->
+-spec push_base_layers(ocibuild:image(), string(), binary(), binary(), push_opts()) ->
+    ok | {error, term()}.
+push_base_layers(Image, BaseUrl, Repo, Token, Opts) ->
     case maps:get(base_manifest, Image, undefined) of
         undefined ->
             %% No base image, nothing to do
@@ -712,14 +753,14 @@ push_base_layers(Image, BaseUrl, Repo, Token) ->
             BaseLayers = maps:get(~"layers", BaseManifest, []),
             BaseRef = maps:get(base, Image, none),
             BaseAuth = maps:get(auth, Image, #{}),
-            push_base_layers_list(BaseLayers, BaseRef, BaseAuth, BaseUrl, Repo, Token)
+            push_base_layers_list(BaseLayers, BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts)
     end.
 
--spec push_base_layers_list(list(), term(), map(), string(), binary(), binary()) ->
+-spec push_base_layers_list(list(), term(), map(), string(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
-push_base_layers_list([], _BaseRef, _BaseAuth, _BaseUrl, _Repo, _Token) ->
+push_base_layers_list([], _BaseRef, _BaseAuth, _BaseUrl, _Repo, _Token, _Opts) ->
     ok;
-push_base_layers_list([Layer | Rest], BaseRef, BaseAuth, BaseUrl, Repo, Token) ->
+push_base_layers_list([Layer | Rest], BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts) ->
     Digest = maps:get(~"digest", Layer),
 
     %% Check if blob already exists in target registry
@@ -732,27 +773,29 @@ push_base_layers_list([Layer | Rest], BaseRef, BaseAuth, BaseUrl, Repo, Token) -
     case ?MODULE:http_head(lists:flatten(CheckUrl), Headers) of
         {ok, _} ->
             %% Layer already exists in target, skip
-            push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token);
+            push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts);
         {error, _} ->
             %% Need to download from source and upload to target
-            case download_and_upload_layer(BaseRef, BaseAuth, Digest, BaseUrl, Repo, Token) of
+            case download_and_upload_layer(BaseRef, BaseAuth, Digest, BaseUrl, Repo, Token, Opts) of
                 ok ->
-                    push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token);
+                    push_base_layers_list(Rest, BaseRef, BaseAuth, BaseUrl, Repo, Token, Opts);
                 {error, _} = Err ->
                     Err
             end
     end.
 
--spec download_and_upload_layer(term(), map(), binary(), string(), binary(), binary()) ->
+-spec download_and_upload_layer(term(), map(), binary(), string(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
-download_and_upload_layer(none, _BaseAuth, _Digest, _BaseUrl, _Repo, _Token) ->
+download_and_upload_layer(none, _BaseAuth, _Digest, _BaseUrl, _Repo, _Token, _Opts) ->
     {error, no_base_ref};
-download_and_upload_layer({SrcRegistry, SrcRepo, _SrcRef}, BaseAuth, Digest, BaseUrl, Repo, Token) ->
+download_and_upload_layer(
+    {SrcRegistry, SrcRepo, _SrcRef}, BaseAuth, Digest, BaseUrl, Repo, Token, Opts
+) ->
     %% Download blob from source registry
     case pull_blob(SrcRegistry, SrcRepo, Digest, BaseAuth) of
         {ok, Data} ->
             %% Upload to target registry
-            push_blob(BaseUrl, Repo, Digest, Data, Token);
+            push_blob(BaseUrl, Repo, Digest, Data, Token, Opts);
         {error, _} = Err ->
             Err
     end.
@@ -778,9 +821,15 @@ push_config(#{config := Config}, BaseUrl, Repo, Token) ->
             Err
     end.
 
-%% Push a single blob
+%% Push a single blob (backward compatible version)
 -spec push_blob(string(), binary(), binary(), binary(), binary()) -> ok | {error, term()}.
 push_blob(BaseUrl, Repo, Digest, Data, Token) ->
+    push_blob(BaseUrl, Repo, Digest, Data, Token, #{}).
+
+%% Push a single blob with options (supports chunked uploads)
+-spec push_blob(string(), binary(), binary(), binary(), binary(), push_opts()) ->
+    ok | {error, term()}.
+push_blob(BaseUrl, Repo, Digest, Data, Token, Opts) ->
     %% Check if blob already exists
     CheckUrl =
         io_lib:format(
@@ -795,18 +844,54 @@ push_blob(BaseUrl, Repo, Digest, Data, Token) ->
             ok;
         {error, _} ->
             %% Need to upload
-            do_push_blob(BaseUrl, Repo, Digest, Data, Token)
+            do_push_blob(BaseUrl, Repo, Digest, Data, Token, Opts)
     end.
 
-%% Actually upload a blob
--spec do_push_blob(string(), binary(), binary(), binary(), binary()) ->
+%% Actually upload a blob - decides between monolithic and chunked based on size
+%% Falls back to monolithic if registry doesn't support chunked uploads (416 error)
+-spec do_push_blob(string(), binary(), binary(), binary(), binary(), push_opts()) ->
     ok | {error, term()}.
-do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
+do_push_blob(BaseUrl, Repo, Digest, Data, Token, Opts) ->
+    ChunkSize = maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE),
+    case byte_size(Data) >= ChunkSize of
+        true ->
+            %% Try chunked upload for large blobs
+            case upload_blob_chunked(BaseUrl, Repo, Digest, Data, Token, Opts) of
+                ok ->
+                    ok;
+                {error, {http_error, 416, _}} ->
+                    %% Registry doesn't support chunked uploads (e.g., GHCR)
+                    %% Fall back to monolithic upload
+                    do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token, Opts);
+                {error, _} = Err ->
+                    Err
+            end;
+        false ->
+            %% Use monolithic upload for small blobs
+            do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token, Opts)
+    end.
+
+%% Monolithic upload - single PUT request
+-spec do_push_blob_monolithic(string(), binary(), binary(), binary(), binary(), push_opts()) ->
+    ok | {error, term()}.
+do_push_blob_monolithic(BaseUrl, Repo, Digest, Data, Token, Opts) ->
+    ProgressFn = maps:get(progress, Opts, undefined),
+    LayerIndex = maps:get(layer_index, Opts, 0),
+    TotalLayers = maps:get(total_layers, Opts, 1),
+    TotalSize = byte_size(Data),
+    %% Report initial progress (0%)
+    maybe_report_progress(ProgressFn, #{
+        phase => uploading,
+        layer_index => LayerIndex,
+        total_layers => TotalLayers,
+        bytes_sent => 0,
+        total_bytes => TotalSize
+    }),
     %% Start upload session
     InitUrl = io_lib:format("~s/v2/~s/blobs/uploads/", [BaseUrl, binary_to_list(Repo)]),
     Headers = auth_headers(Token),
 
-    case http_post(lists:flatten(InitUrl), Headers, <<>>) of
+    case ?MODULE:http_post(lists:flatten(InitUrl), Headers, <<>>) of
         {ok, _, ResponseHeaders} ->
             %% Get upload location
             case proplists:get_value("location", ResponseHeaders) of
@@ -829,8 +914,18 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
                                 {"Content-Type", "application/octet-stream"},
                                 {"Content-Length", integer_to_list(byte_size(Data))}
                             ],
-                    case http_put(PutUrl, PutHeaders, Data) of
+                    %% Use longer timeout for large uploads: base 60s + 1s per 100KB
+                    PutTimeout = 60000 + (byte_size(Data) div 100),
+                    case ?MODULE:http_put(PutUrl, PutHeaders, Data, PutTimeout) of
                         {ok, _} ->
+                            %% Report final progress (100%)
+                            maybe_report_progress(ProgressFn, #{
+                                phase => uploading,
+                                layer_index => LayerIndex,
+                                total_layers => TotalLayers,
+                                bytes_sent => TotalSize,
+                                total_bytes => TotalSize
+                            }),
                             ok;
                         {error, _} = Err ->
                             Err
@@ -838,6 +933,208 @@ do_push_blob(BaseUrl, Repo, Digest, Data, Token) ->
             end;
         {error, _} = Err ->
             Err
+    end.
+
+%%%===================================================================
+%%% Chunked upload functions (OCI Distribution Spec compliant)
+%%%===================================================================
+
+%% Start a new upload session
+%% POST /v2/{repo}/blobs/uploads/ -> returns Location header with upload URL
+-spec start_upload_session(string(), binary(), binary()) ->
+    {ok, upload_session()} | {error, term()}.
+start_upload_session(BaseUrl, Repo, Token) ->
+    InitUrl = io_lib:format("~s/v2/~s/blobs/uploads/", [BaseUrl, binary_to_list(Repo)]),
+    Headers = auth_headers(Token),
+    case ?MODULE:http_post(lists:flatten(InitUrl), Headers, <<>>) of
+        {ok, _, ResponseHeaders} ->
+            case proplists:get_value("location", ResponseHeaders) of
+                undefined ->
+                    {error, no_upload_location};
+                Location ->
+                    AbsLocation = resolve_url(BaseUrl, Location),
+                    {ok, #{upload_url => AbsLocation, bytes_uploaded => 0}}
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Upload a single chunk via PATCH
+%% PATCH {upload_url} with Content-Range header
+-spec upload_chunk(upload_session(), binary(), non_neg_integer(), non_neg_integer(), binary()) ->
+    {ok, upload_session()} | {error, term()}.
+upload_chunk(Session, ChunkData, RangeStart, RangeEnd, Token) ->
+    #{upload_url := UploadUrl} = Session,
+    Headers =
+        auth_headers(Token) ++
+            [
+                {"Content-Type", "application/octet-stream"},
+                {"Content-Range", format_content_range(RangeStart, RangeEnd)},
+                {"Content-Length", integer_to_list(byte_size(ChunkData))}
+            ],
+    %% Use longer timeout for large chunks: base 60s + 1ms per 100 bytes
+    Timeout = max(?DEFAULT_TIMEOUT, 60000 + (byte_size(ChunkData) div 100)),
+    case ?MODULE:http_patch(UploadUrl, Headers, ChunkData, Timeout) of
+        {ok, 202, ResponseHeaders} ->
+            %% Parse Range header to get bytes uploaded
+            BytesUploaded =
+                case proplists:get_value("range", ResponseHeaders) of
+                    undefined ->
+                        %% If no Range header, assume all bytes were accepted
+                        RangeEnd + 1;
+                    RangeValue ->
+                        case parse_range_header(RangeValue) of
+                            {ok, Bytes} -> Bytes;
+                            error -> RangeEnd + 1
+                        end
+                end,
+            %% Update session with new upload URL if provided (some registries change it)
+            NewUploadUrl =
+                case proplists:get_value("location", ResponseHeaders) of
+                    undefined -> UploadUrl;
+                    NewLoc -> resolve_url(UploadUrl, NewLoc)
+                end,
+            {ok, Session#{upload_url => NewUploadUrl, bytes_uploaded => BytesUploaded}};
+        {ok, Status, _} ->
+            {error, {http_error, Status, "Unexpected status from PATCH"}};
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Complete the upload via PUT
+%% PUT {upload_url}?digest={digest} with optional final chunk
+-spec complete_upload(upload_session(), binary(), binary(), binary()) ->
+    ok | {error, term()}.
+complete_upload(Session, Digest, Token, FinalChunk) ->
+    #{upload_url := UploadUrl} = Session,
+    Separator =
+        case lists:member($?, UploadUrl) of
+            true -> "&";
+            false -> "?"
+        end,
+    PutUrl = UploadUrl ++ Separator ++ "digest=" ++ binary_to_list(Digest),
+    Headers =
+        auth_headers(Token) ++
+            [
+                {"Content-Type", "application/octet-stream"},
+                {"Content-Length", integer_to_list(byte_size(FinalChunk))}
+            ],
+    %% Use adaptive timeout: base 60s + 1ms per 100 bytes
+    PutTimeout = max(?DEFAULT_TIMEOUT, 60000 + (byte_size(FinalChunk) div 100)),
+    case ?MODULE:http_put(PutUrl, Headers, FinalChunk, PutTimeout) of
+        {ok, _} ->
+            ok;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Main chunked upload orchestration
+%% Uploads blob in chunks via PATCH requests, then completes with PUT
+-spec upload_blob_chunked(string(), binary(), binary(), binary(), binary(), push_opts()) ->
+    ok | {error, term()}.
+upload_blob_chunked(BaseUrl, Repo, Digest, Data, Token, Opts) ->
+    ChunkSize = maps:get(chunk_size, Opts, ?DEFAULT_CHUNK_SIZE),
+    TotalSize = byte_size(Data),
+    ProgressFn = maps:get(progress, Opts, undefined),
+    LayerIndex = maps:get(layer_index, Opts, 0),
+    TotalLayers = maps:get(total_layers, Opts, 1),
+
+    %% Start upload session
+    case start_upload_session(BaseUrl, Repo, Token) of
+        {ok, Session} ->
+            %% Upload chunks
+            upload_chunks_loop(
+                Session,
+                Data,
+                Digest,
+                0,
+                ChunkSize,
+                TotalSize,
+                Token,
+                ProgressFn,
+                LayerIndex,
+                TotalLayers
+            );
+        {error, _} = Err ->
+            Err
+    end.
+
+%% Internal: loop through chunks and upload each one
+-spec upload_chunks_loop(
+    upload_session(),
+    binary(),
+    binary(),
+    non_neg_integer(),
+    pos_integer(),
+    non_neg_integer(),
+    binary(),
+    progress_callback() | undefined,
+    non_neg_integer(),
+    non_neg_integer()
+) -> ok | {error, term()}.
+upload_chunks_loop(
+    Session,
+    Data,
+    Digest,
+    Offset,
+    ChunkSize,
+    TotalSize,
+    Token,
+    ProgressFn,
+    LayerIndex,
+    TotalLayers
+) ->
+    Remaining = TotalSize - Offset,
+    case Remaining =< ChunkSize of
+        true ->
+            %% Final chunk - send via PUT to complete the upload
+            FinalChunk = binary:part(Data, Offset, Remaining),
+            %% Report final progress
+            maybe_report_progress(ProgressFn, #{
+                phase => uploading,
+                layer_index => LayerIndex,
+                total_layers => TotalLayers,
+                bytes_sent => TotalSize,
+                total_bytes => TotalSize
+            }),
+            complete_upload(Session, Digest, Token, FinalChunk);
+        false ->
+            %% Upload chunk via PATCH
+            ChunkData = binary:part(Data, Offset, ChunkSize),
+            RangeStart = Offset,
+            RangeEnd = Offset + ChunkSize - 1,
+
+            %% Report progress before chunk upload
+            maybe_report_progress(ProgressFn, #{
+                phase => uploading,
+                layer_index => LayerIndex,
+                total_layers => TotalLayers,
+                bytes_sent => Offset,
+                total_bytes => TotalSize
+            }),
+
+            case
+                with_retry(
+                    fun() -> upload_chunk(Session, ChunkData, RangeStart, RangeEnd, Token) end, 3
+                )
+            of
+                {ok, NewSession} ->
+                    %% Continue with next chunk
+                    upload_chunks_loop(
+                        NewSession,
+                        Data,
+                        Digest,
+                        Offset + ChunkSize,
+                        ChunkSize,
+                        TotalSize,
+                        Token,
+                        ProgressFn,
+                        LayerIndex,
+                        TotalLayers
+                    );
+                {error, _} = Err ->
+                    Err
+            end
     end.
 
 %% Push manifest
@@ -903,7 +1200,7 @@ push_manifest(Image, BaseUrl, Repo, Tag, Token, ConfigDigest, ConfigSize) ->
     Headers =
         auth_headers(Token) ++ [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
 
-    case http_put(lists:flatten(Url), Headers, ManifestJson) of
+    case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
         {ok, _} ->
             ok;
         {error, _} = Err ->
@@ -942,22 +1239,69 @@ resolve_url(BaseUrl, RelUrl) ->
 %%% HTTP helpers (using httpc)
 %%%===================================================================
 
-%% Ensure inets is started
+%% Ensure ssl is started and our stand_alone httpc is running
 -spec ensure_started() -> ok.
 ensure_started() ->
-    case inets:start() of
-        ok ->
-            ok;
-        {error, {already_started, _}} ->
-            ok
-    end,
+    %% SSL is needed for HTTPS
     case ssl:start() of
-        ok ->
-            ok;
-        {error, {already_started, _}} ->
-            ok
+        ok -> ok;
+        {error, {already_started, _}} -> ok
     end,
-    ok.
+    %% Start httpc in stand_alone mode (not supervised by inets)
+    %% This allows clean shutdown when we're done
+    ProfileName = httpc_profile_name(?HTTPC_PROFILE),
+    case persistent_term:get(?HTTPC_KEY, undefined) of
+        undefined ->
+            %% Check if a process is already registered under the profile name
+            %% (e.g., from a previous crashed instance or test scenario)
+            case whereis(ProfileName) of
+                ExistingPid when is_pid(ExistingPid) ->
+                    %% Reuse existing registered process
+                    persistent_term:put(?HTTPC_KEY, ExistingPid),
+                    ok;
+                undefined ->
+                    {ok, Pid} = inets:start(httpc, [{profile, ?HTTPC_PROFILE}], stand_alone),
+                    %% Register the process so httpc:request/5 can find it by profile name
+                    %% stand_alone mode doesn't register automatically
+                    true = register(ProfileName, Pid),
+                    persistent_term:put(?HTTPC_KEY, Pid),
+                    ok
+            end;
+        _Pid ->
+            ok
+    end.
+
+%% Generate the registered name for an httpc profile (same as OTP internal)
+-spec httpc_profile_name(atom()) -> atom().
+httpc_profile_name(Profile) ->
+    list_to_atom("httpc_" ++ atom_to_list(Profile)).
+
+-doc "Stop the stand_alone httpc to allow clean VM exit.".
+-spec stop_httpc() -> ok.
+stop_httpc() ->
+    case persistent_term:get(?HTTPC_KEY, undefined) of
+        undefined ->
+            ok;
+        Pid ->
+            %% Clear the persistent_term first so no new requests use this pid
+            _ = persistent_term:erase(?HTTPC_KEY),
+            %% Stop httpc in a separate process to avoid EXIT signal propagation
+            %% The spawn will unregister the name and stop the httpc process
+            CleanupPid = spawn(fun() ->
+                _ = (catch unregister(httpc_profile_name(?HTTPC_PROFILE))),
+                _ = inets:stop(stand_alone, Pid)
+            end),
+            %% Wait synchronously for cleanup process to finish, with a timeout
+            Ref = erlang:monitor(process, CleanupPid),
+            receive
+                {'DOWN', Ref, process, CleanupPid, _Reason} ->
+                    ok
+            after ?DEFAULT_TIMEOUT ->
+                %% Cleanup took too long; stop waiting but keep going
+                erlang:demonitor(Ref, [flush]),
+                ok
+            end
+    end.
 
 %% Get SSL options for HTTPS requests
 -spec ssl_opts() -> [ssl:tls_client_option()].
@@ -988,7 +1332,7 @@ http_get(Url, Headers, RedirectsLeft) ->
     %% Disable autoredirect - we handle redirects manually to strip auth headers
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
-    case httpc:request(get, Request, HttpOpts, Opts) of
+    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, _, Body}} when Status >= 200, Status < 300 ->
             {ok, Body};
         {ok, {{_, Status, _}, RespHeaders, _}} when
@@ -1040,7 +1384,7 @@ http_head(Url, Headers) ->
     Request = {Url, AllHeaders},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{socket_opts, [{keepalive, false}]}],
-    case httpc:request(head, Request, HttpOpts, Opts) of
+    case httpc:request(head, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
             {ok, ResponseHeaders};
         {ok, {{_, Status, Reason}, _, _}} ->
@@ -1058,7 +1402,7 @@ http_post(Url, Headers, Body) ->
     Request = {Url, AllHeaders, ContentType, Body},
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
-    case httpc:request(post, Request, HttpOpts, Opts) of
+    case httpc:request(post, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, ResponseHeaders, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, _ResponseBody}} ->
@@ -1070,15 +1414,40 @@ http_post(Url, Headers, Body) ->
 -spec http_put(string(), [{string(), string()}], binary()) ->
     {ok, binary()} | {error, term()}.
 http_put(Url, Headers, Body) ->
+    http_put(Url, Headers, Body, ?DEFAULT_TIMEOUT).
+
+-spec http_put(string(), [{string(), string()}], binary(), pos_integer()) ->
+    {ok, binary()} | {error, term()}.
+http_put(Url, Headers, Body, Timeout) ->
     ensure_started(),
     ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
     AllHeaders = Headers ++ [{"Connection", "close"}],
     Request = {Url, AllHeaders, ContentType, Body},
-    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
+    HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
     Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
-    case httpc:request(put, Request, HttpOpts, Opts) of
+    case httpc:request(put, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, {{_, Status, _}, _, ResponseBody}} when Status >= 200, Status < 300 ->
             {ok, ResponseBody};
+        {ok, {{_, Status, Reason}, _, _}} ->
+            {error, {http_error, Status, Reason}};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% HTTP PATCH request for chunked uploads
+%% Returns status code and headers for Content-Range tracking
+-spec http_patch(string(), [{string(), string()}], binary(), pos_integer()) ->
+    {ok, integer(), [{string(), string()}]} | {error, term()}.
+http_patch(Url, Headers, Body, Timeout) ->
+    ensure_started(),
+    ContentType = proplists:get_value("Content-Type", Headers, "application/octet-stream"),
+    AllHeaders = Headers ++ [{"Connection", "close"}],
+    Request = {Url, AllHeaders, ContentType, Body},
+    HttpOpts = [{timeout, Timeout}, {ssl, ssl_opts()}],
+    Opts = [{body_format, binary}, {socket_opts, [{keepalive, false}]}],
+    case httpc:request(patch, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
+        {ok, {{_, Status, _}, ResponseHeaders, _}} when Status >= 200, Status < 300 ->
+            {ok, Status, normalize_headers(ResponseHeaders)};
         {ok, {{_, Status, Reason}, _, _}} ->
             {error, {http_error, Status, Reason}};
         {error, Reason} ->
@@ -1089,6 +1458,32 @@ http_put(Url, Headers, Body) ->
 -spec normalize_headers([{string(), string()}]) -> [{string(), string()}].
 normalize_headers(Headers) ->
     [{string:lowercase(K), V} || {K, V} <- Headers].
+
+%%%===================================================================
+%%% Content-Range helpers for chunked uploads
+%%%===================================================================
+
+%% Format Content-Range header value for chunked upload
+%% OCI spec uses format: "start-end" (inclusive, 0-indexed)
+-spec format_content_range(non_neg_integer(), non_neg_integer()) -> string().
+format_content_range(Start, End) when Start =< End ->
+    lists:flatten(io_lib:format("~B-~B", [Start, End])).
+
+%% Parse Range header from response (e.g., "0-1048575" -> 1048576 bytes uploaded)
+%% Returns the number of bytes the server has received (end + 1)
+-spec parse_range_header(string()) -> {ok, non_neg_integer()} | error.
+parse_range_header(Value) ->
+    case string:split(Value, "-") of
+        [_StartStr, EndStr] ->
+            case string:to_integer(string:trim(EndStr)) of
+                {End, []} when End >= 0 ->
+                    {ok, End + 1};
+                _ ->
+                    error
+            end;
+        _ ->
+            error
+    end.
 
 %%%===================================================================
 %%% Retry helpers
@@ -1205,9 +1600,13 @@ http_get_with_progress(Url, Headers, ProgressFn, Phase, TotalBytes, RedirectsLef
     Request = {Url, AllHeaders},
     %% Use streaming mode to receive chunks
     HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {autoredirect, false}, {ssl, ssl_opts()}],
-    Opts = [{sync, false}, {stream, self}, {socket_opts, [{keepalive, false}]}],
+    Opts = [
+        {sync, false},
+        {stream, self},
+        {socket_opts, [{keepalive, false}]}
+    ],
 
-    case httpc:request(get, Request, HttpOpts, Opts) of
+    case httpc:request(get, Request, HttpOpts, Opts, ?HTTPC_PROFILE) of
         {ok, RequestId} ->
             receive_stream(
                 RequestId, ProgressFn, Phase, TotalBytes, <<>>, Url, Headers, RedirectsLeft

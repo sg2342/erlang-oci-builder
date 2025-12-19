@@ -40,7 +40,18 @@ make_temp_dir(Prefix) ->
         ok ->
             TmpDir;
         {error, eexist} ->
-            TmpDir
+            %% Clean up existing directory and recreate it
+            case cleanup_temp_dir(TmpDir) of
+                ok ->
+                    case file:make_dir(TmpDir) of
+                        ok ->
+                            TmpDir;
+                        {error, Reason2} ->
+                            erlang:error({temp_dir_create_failed, TmpDir, Reason2})
+                    end;
+                {error, Reason1} ->
+                    erlang:error({temp_dir_cleanup_failed, TmpDir, Reason1})
+            end
     end.
 
 %% @doc Create a unique temporary file path

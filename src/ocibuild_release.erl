@@ -14,13 +14,48 @@ Security features:
 
 -include_lib("kernel/include/file.hrl").
 
-%% Public API
+%% Public API - High-level Orchestration
+-export([run/3]).
+
+%% Public API - File Collection
 -export([
     collect_release_files/1,
-    collect_release_files/2,
+    collect_release_files/2
+]).
+
+%% Public API - Image Building
+-export([
     build_image/7,
     build_image/8,
     build_image/9
+]).
+
+%% Public API - Output Operations (save/push)
+-export([
+    save_image/3,
+    push_image/5,
+    parse_tag/1,
+    add_description/2
+]).
+
+%% Public API - Authentication
+-export([
+    get_push_auth/0,
+    get_pull_auth/0
+]).
+
+%% Public API - Progress Display
+-export([
+    make_progress_callback/0,
+    format_progress/2,
+    format_bytes/1,
+    is_tty/0,
+    clear_progress_line/0
+]).
+
+%% Public API - Cleanup
+-export([
+    stop_httpc/0
 ]).
 
 %% Utility exports (used by build tools)
@@ -42,6 +77,212 @@ Security features:
 -endif.
 
 -define(DEFAULT_WORKDIR, ~"/app").
+
+%%%===================================================================
+%%% High-level Orchestration
+%%%===================================================================
+
+-doc """
+Run the complete OCI image build pipeline.
+
+This function orchestrates the entire build process using the adapter module
+for build-system-specific operations (configuration, release finding, logging).
+
+The adapter module must implement the `ocibuild_adapter` behaviour:
+- `get_config/1` - Extract configuration from build system state
+- `find_release/2` - Locate the release directory
+- `info/2`, `console/2`, `error/2` - Logging functions
+
+Options:
+- `cmd` - Start command override (default: from adapter config or "foreground")
+
+Returns `{ok, State}` on success (State passed through from adapter),
+or `{error, Reason}` on failure.
+""".
+-spec run(module(), term(), map()) -> {ok, term()} | {error, term()}.
+run(AdapterModule, AdapterState, Opts) ->
+    try
+        %% Get configuration from adapter
+        Config = AdapterModule:get_config(AdapterState),
+        #{
+            base_image := BaseImage,
+            workdir := Workdir,
+            env := EnvMap,
+            expose := ExposePorts,
+            labels := Labels,
+            cmd := DefaultCmd,
+            description := Description,
+            tag := TagOpt,
+            output := OutputOpt,
+            push := PushRegistry,
+            chunk_size := ChunkSize
+        } = Config,
+
+        %% Get tag (required)
+        Tag =
+            case TagOpt of
+                undefined -> throw({error, missing_tag});
+                T -> T
+            end,
+
+        AdapterModule:info("Building OCI image: ~s", [Tag]),
+
+        %% Find release using adapter
+        case AdapterModule:find_release(AdapterState, Opts) of
+            {ok, ReleaseName, ReleasePath} ->
+                AdapterModule:info("Using release: ~s at ~s", [ReleaseName, ReleasePath]),
+
+                %% Collect files from release
+                case collect_release_files(ReleasePath) of
+                    {ok, Files} ->
+                        AdapterModule:info("Collected ~p files from release", [length(Files)]),
+
+                        %% Build the image
+                        AdapterModule:info("Base image: ~s", [BaseImage]),
+                        Cmd = maps:get(cmd, Opts, DefaultCmd),
+
+                        ProgressFn = make_progress_callback(),
+                        PullAuth = get_pull_auth(),
+                        BuildOpts = #{auth => PullAuth, progress => ProgressFn},
+
+                        Result = build_image(
+                            BaseImage,
+                            Files,
+                            ReleaseName,
+                            Workdir,
+                            EnvMap,
+                            ExposePorts,
+                            Labels,
+                            Cmd,
+                            BuildOpts
+                        ),
+                        clear_progress_line(),
+
+                        case Result of
+                            {ok, Image0} ->
+                                %% Add description annotation
+                                Image = add_description(Image0, Description),
+
+                                %% Output the image (save and optionally push)
+                                do_output(
+                                    AdapterModule,
+                                    AdapterState,
+                                    Image,
+                                    Tag,
+                                    OutputOpt,
+                                    PushRegistry,
+                                    ChunkSize
+                                );
+                            {error, BuildError} ->
+                                {error, {build_failed, BuildError}}
+                        end;
+                    {error, CollectError} ->
+                        {error, {collect_failed, CollectError}}
+                end;
+            {error, FindError} ->
+                {error, {release_not_found, FindError}}
+        end
+    catch
+        throw:{error, Reason} ->
+            {error, Reason};
+        throw:Reason ->
+            {error, Reason}
+    end.
+
+%% @private Output the image (save and optionally push)
+-spec do_output(
+    module(),
+    term(),
+    ocibuild:image(),
+    binary(),
+    binary() | undefined,
+    binary() | undefined,
+    pos_integer() | undefined
+) -> {ok, term()} | {error, term()}.
+do_output(AdapterModule, AdapterState, Image, Tag, OutputOpt, PushRegistry, ChunkSize) ->
+    %% Determine output path
+    %% Handle both undefined (Erlang) and nil (Elixir) for missing values
+    OutputPath =
+        case OutputOpt of
+            undefined ->
+                default_output_path(Tag);
+            nil ->
+                default_output_path(Tag);
+            Path ->
+                binary_to_list(Path)
+        end,
+
+    %% Save tarball
+    AdapterModule:info("Saving image to ~s", [OutputPath]),
+    case save_image(Image, OutputPath, Tag) of
+        ok ->
+            AdapterModule:info("Image saved successfully", []),
+
+            %% Push if requested
+            %% Handle both undefined (Erlang) and nil (Elixir), and empty binary
+            case PushRegistry of
+                undefined ->
+                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
+                    {ok, AdapterState};
+                nil ->
+                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
+                    {ok, AdapterState};
+                <<>> ->
+                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
+                    {ok, AdapterState};
+                _ ->
+                    do_push(AdapterModule, AdapterState, Image, Tag, PushRegistry, ChunkSize)
+            end;
+        {error, SaveError} ->
+            {error, {save_failed, SaveError}}
+    end.
+
+%% @private Generate default output path from tag
+default_output_path(Tag) ->
+    TagStr = binary_to_list(Tag),
+    ImageName = lists:last(string:split(TagStr, "/", all)),
+    SafeName = lists:map(
+        fun
+            ($:) -> $-;
+            (C) -> C
+        end,
+        ImageName
+    ),
+    SafeName ++ ".tar.gz".
+
+%% @private Push image to registry
+-spec do_push(
+    module(),
+    term(),
+    ocibuild:image(),
+    binary(),
+    binary(),
+    pos_integer() | undefined
+) -> {ok, term()} | {error, term()}.
+do_push(AdapterModule, AdapterState, Image, Tag, Registry, ChunkSize) ->
+    {Repo, ImageTag} = parse_tag(Tag),
+    Auth = get_push_auth(),
+
+    %% Build push options
+    %% ChunkSize is expected to be in bytes already (or undefined/nil)
+    PushOpts =
+        case ChunkSize of
+            undefined -> #{};
+            nil -> #{};
+            Size when is_integer(Size), Size > 0 -> #{chunk_size => Size};
+            _ -> #{}
+        end,
+
+    AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, ImageTag]),
+
+    RepoTag = <<Repo/binary, ":", ImageTag/binary>>,
+    case push_image(Image, Registry, RepoTag, Auth, PushOpts) of
+        ok ->
+            AdapterModule:info("Push successful!", []),
+            {ok, AdapterState};
+        {error, PushError} ->
+            {error, {push_failed, PushError}}
+    end.
 
 %%%===================================================================
 %%% Public API
@@ -419,3 +660,240 @@ to_binary(Value) when is_atom(Value) ->
     atom_to_binary(Value);
 to_binary(Value) when is_integer(Value) ->
     integer_to_binary(Value).
+
+%%%===================================================================
+%%% Output Operations (save/push)
+%%%===================================================================
+
+-doc """
+Save an image to a tarball file.
+
+The image is saved in OCI layout format compatible with `podman load`.
+""".
+-spec save_image(ocibuild:image(), file:filename(), binary()) -> ok | {error, term()}.
+save_image(Image, OutputPath, Tag) ->
+    SaveOpts = #{tag => Tag},
+    ocibuild:save(Image, OutputPath, SaveOpts).
+
+-doc """
+Push an image to a registry.
+
+Handles authentication, progress display, and httpc cleanup.
+""".
+-spec push_image(ocibuild:image(), binary(), binary(), map(), map()) -> ok | {error, term()}.
+push_image(Image, Registry, RepoTag, Auth, Opts) ->
+    ProgressFn = make_progress_callback(),
+    PushOpts = Opts#{progress => ProgressFn},
+    Result = ocibuild:push(Image, Registry, RepoTag, Auth, PushOpts),
+    clear_progress_line(),
+    stop_httpc(),
+    Result.
+
+-doc """
+Parse a tag into repository and tag parts.
+
+Examples:
+- `<<"myapp:1.0.0">>` -> `{<<"myapp">>, <<"1.0.0">>}`
+- `<<"myapp">>` -> `{<<"myapp">>, <<"latest">>}`
+- `<<"ghcr.io/org/app:v1">>` -> `{<<"ghcr.io/org/app">>, <<"v1">>}`
+""".
+-spec parse_tag(binary()) -> {Repo :: binary(), Tag :: binary()}.
+parse_tag(Tag) ->
+    %% Find the last colon that's not part of a port number
+    %% Strategy: split on ":" and check if the last part looks like a tag
+    case binary:split(Tag, ~":", [global]) of
+        [Repo] ->
+            {Repo, ~"latest"};
+        Parts ->
+            %% Check if the last part looks like a tag (no slashes)
+            LastPart = lists:last(Parts),
+            case binary:match(LastPart, ~"/") of
+                nomatch ->
+                    %% Last part is the tag
+                    Repo = iolist_to_binary(lists:join(~":", lists:droplast(Parts))),
+                    {Repo, LastPart};
+                _ ->
+                    %% Last part contains a slash, so no tag specified
+                    {Tag, ~"latest"}
+            end
+    end.
+
+-doc """
+Add an OCI description annotation to an image.
+
+If description is undefined or empty, returns the image unchanged.
+""".
+-spec add_description(ocibuild:image(), binary() | undefined) -> ocibuild:image().
+add_description(Image, undefined) ->
+    Image;
+add_description(Image, <<>>) ->
+    Image;
+add_description(Image, Description) when is_binary(Description) ->
+    ocibuild:annotation(Image, ~"org.opencontainers.image.description", Description).
+
+%%%===================================================================
+%%% Authentication
+%%%===================================================================
+
+-doc """
+Get authentication credentials for pushing images.
+
+Reads from environment variables:
+- `OCIBUILD_PUSH_TOKEN` - Bearer token (takes priority)
+- `OCIBUILD_PUSH_USERNAME` / `OCIBUILD_PUSH_PASSWORD` - Basic auth
+""".
+-spec get_push_auth() -> map().
+get_push_auth() ->
+    case os:getenv("OCIBUILD_PUSH_TOKEN") of
+        false ->
+            case {os:getenv("OCIBUILD_PUSH_USERNAME"), os:getenv("OCIBUILD_PUSH_PASSWORD")} of
+                {false, _} ->
+                    #{};
+                {_, false} ->
+                    #{};
+                {User, Pass} ->
+                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
+            end;
+        Token ->
+            #{token => list_to_binary(Token)}
+    end.
+
+-doc """
+Get authentication credentials for pulling base images.
+
+Reads from environment variables:
+- `OCIBUILD_PULL_TOKEN` - Bearer token (takes priority)
+- `OCIBUILD_PULL_USERNAME` / `OCIBUILD_PULL_PASSWORD` - Basic auth
+""".
+-spec get_pull_auth() -> map().
+get_pull_auth() ->
+    case os:getenv("OCIBUILD_PULL_TOKEN") of
+        false ->
+            case {os:getenv("OCIBUILD_PULL_USERNAME"), os:getenv("OCIBUILD_PULL_PASSWORD")} of
+                {false, _} ->
+                    #{};
+                {_, false} ->
+                    #{};
+                {User, Pass} ->
+                    #{username => list_to_binary(User), password => list_to_binary(Pass)}
+            end;
+        Token ->
+            #{token => list_to_binary(Token)}
+    end.
+
+%%%===================================================================
+%%% Progress Display
+%%%===================================================================
+
+-doc """
+Check if stdout is connected to a TTY (terminal).
+
+Returns true for interactive terminals, false for CI/pipes.
+""".
+-spec is_tty() -> boolean().
+is_tty() ->
+    case io:columns() of
+        {ok, _} -> true;
+        {error, _} -> false
+    end.
+
+-doc """
+Clear the progress line if in TTY mode.
+
+In CI mode (non-TTY), progress is printed with newlines so no clearing needed.
+""".
+-spec clear_progress_line() -> ok.
+clear_progress_line() ->
+    case is_tty() of
+        true -> io:format("\r\e[K", []);
+        false -> ok
+    end.
+
+-doc """
+Create a progress callback for terminal display.
+
+Handles both TTY (animated progress) and CI (final state only) modes.
+""".
+-spec make_progress_callback() -> ocibuild_registry:progress_callback().
+make_progress_callback() ->
+    IsTTY = is_tty(),
+    fun(Info) ->
+        #{phase := Phase, total_bytes := Total} = Info,
+        Bytes = maps:get(bytes_sent, Info, maps:get(bytes_received, Info, 0)),
+        LayerIndex = maps:get(layer_index, Info, 0),
+        HasProgress = is_integer(Total) andalso Total > 0 andalso Bytes > 0,
+        IsComplete = Bytes =:= Total,
+        AlreadyPrinted =
+            case IsTTY of
+                true ->
+                    false;
+                false when IsComplete ->
+                    Key = {ocibuild_progress_done, Phase, LayerIndex},
+                    case get(Key) of
+                        true ->
+                            true;
+                        _ ->
+                            put(Key, true),
+                            false
+                    end;
+                false ->
+                    false
+            end,
+        ShouldPrint = HasProgress andalso (IsTTY orelse IsComplete) andalso not AlreadyPrinted,
+        case ShouldPrint of
+            true ->
+                PhaseStr =
+                    case Phase of
+                        manifest -> "Fetching manifest";
+                        config -> "Fetching config  ";
+                        layer -> "Downloading layer";
+                        uploading -> "Uploading layer  "
+                    end,
+                ProgressStr = format_progress(Bytes, Total),
+                case IsTTY of
+                    true -> io:format("\r\e[K  ~s: ~s", [PhaseStr, ProgressStr]);
+                    false -> io:format("  ~s: ~s~n", [PhaseStr, ProgressStr])
+                end;
+            false ->
+                ok
+        end
+    end.
+
+-doc "Format progress as a string with progress bar.".
+-spec format_progress(non_neg_integer(), non_neg_integer() | unknown) -> iolist().
+format_progress(Received, unknown) ->
+    io_lib:format("~s", [format_bytes(Received)]);
+format_progress(Received, Total) when is_integer(Total), Total > 0 ->
+    Percent = min(100, (Received * 100) div Total),
+    BarWidth = 30,
+    Filled = (Percent * BarWidth) div 100,
+    Empty = BarWidth - Filled,
+    Bar = lists:duplicate(Filled, $=) ++ lists:duplicate(Empty, $\s),
+    io_lib:format("[~s] ~3B% ~s/~s", [Bar, Percent, format_bytes(Received), format_bytes(Total)]);
+format_progress(Received, _) ->
+    io_lib:format("~s", [format_bytes(Received)]).
+
+-doc "Format bytes as human-readable string.".
+-spec format_bytes(non_neg_integer()) -> iolist().
+format_bytes(Bytes) when Bytes < 1024 ->
+    io_lib:format("~B B", [Bytes]);
+format_bytes(Bytes) when Bytes < 1024 * 1024 ->
+    io_lib:format("~.1f KB", [Bytes / 1024]);
+format_bytes(Bytes) when Bytes < 1024 * 1024 * 1024 ->
+    io_lib:format("~.1f MB", [Bytes / (1024 * 1024)]);
+format_bytes(Bytes) ->
+    io_lib:format("~.2f GB", [Bytes / (1024 * 1024 * 1024)]).
+
+%%%===================================================================
+%%% Cleanup
+%%%===================================================================
+
+-doc """
+Stop the ocibuild httpc profile to allow clean VM exit.
+
+This should be called after push operations to close HTTP connections
+and allow the VM to exit cleanly.
+""".
+-spec stop_httpc() -> ok.
+stop_httpc() ->
+    ocibuild_registry:stop_httpc().
