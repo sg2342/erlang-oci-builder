@@ -10,6 +10,30 @@ This document provides a comprehensive overview of the `ocibuild` project for co
 - Google's `ko` (for Go)
 - Java's `jib`
 
+### Feature Comparison with Similar Tools
+
+| Feature                       | ocibuild        | ko (Go)     | jib (Java)        | .NET Containers |
+|-------------------------------|-----------------|-------------|-------------------|-----------------|
+| No Docker required            | ✅              | ✅          | ✅                | ✅              |
+| Push to registries            | ✅              | ✅          | ✅                | ✅              |
+| Layer caching                 | ✅              | ✅          | ✅                | ✅              |
+| Tarball export                | ✅              | ✅          | ✅                | ✅              |
+| OCI annotations               | ✅              | ✅          | ✅                | ✅              |
+| Build system integration      | ✅ (rebar3/Mix) | ✅          | ✅ (Maven/Gradle) | ✅ (MSBuild)    |
+| **Multi-platform images**     | ❌              | ✅          | ✅                | ✅              |
+| **Smart dependency layering** | ❌              | N/A         | ✅                | ✅              |
+| **SBOM generation**           | ❌              | ✅          | ❌                | ❌              |
+| **Reproducible builds**       | Partial         | ✅          | ✅                | ✅              |
+| **Non-root by default**       | ❌              | ✅          | ❌                | ✅              |
+| **Base image digest labels**  | ❌              | ✅          | ✅                | ✅              |
+| **Image signing**             | ❌              | ✅ (cosign) | ❌                | ❌              |
+| Zstd compression              | ❌              | ✅          | ❌                | ❌              |
+
+**References:**
+- [ko: Easy Go Containers](https://ko.build/)
+- [jib - Build container images for Java](https://github.com/GoogleContainerTools/jib)
+- [.NET SDK container creation](https://learn.microsoft.com/en-us/dotnet/core/containers/overview)
+
 ### Goals
 
 1. **Zero dependencies** — Only OTP stdlib modules (crypto, zlib, inets, ssl, json)
@@ -429,35 +453,98 @@ rebar3 eunit --test=ocibuild_tests:test_name_test
 
 ---
 
-## What's NOT Implemented (TODO)
+## Roadmap (Prioritized)
 
-### High Priority
+### Priority 1: Multi-Platform Images
 
-1. **Multi-Platform Images**
-   - No support for manifest lists / image indexes
-   - Can't build multi-arch images (amd64 + arm64)
+**Impact:** Critical for production deployments
 
-### Medium Priority
+All competing tools support building `linux/amd64` + `linux/arm64` images. This is essential for:
+- Kubernetes clusters with mixed node architectures
+- Apple Silicon development → Linux deployment
+- AWS Graviton / Azure ARM instances
 
-2. **Resumable Uploads**
-   - Chunked uploads are implemented but resume capability is not
-   - If upload fails mid-way, must restart from beginning
-   - Would need session persistence for true resumability
+**Implementation:**
+- Add support for OCI Image Index (manifest list)
+- New module: `ocibuild_index.erl` for manifest list generation
+- Extend `push/5` to push multi-platform images
+- Add `--platform` CLI option (e.g., `--platform=linux/amd64,linux/arm64`)
 
-3. **Better Error Messages**
-   - Some registry errors could be more descriptive
+### Priority 2: Smart Dependency Layering
 
-### Low Priority
+**Impact:** Faster CI/CD, smaller uploads
 
-4. **Zstd Compression**
-   - Defined in media types but not implemented
-   - Would need zstd NIF or pure Erlang implementation
+jib separates Java apps into distinct layers (dependencies vs application code). For BEAM apps:
+```
+Layer 1: Base image
+Layer 2: ERTS + stdlib (rarely changes)
+Layer 3: Dependencies (lib/*)
+Layer 4: Application code (changes often)
+```
 
-5. **Image Signing**
-   - Cosign/Notary support
+When only app code changes, registries only store/transfer Layer 4.
 
-6. **Squashing Layers**
-   - Combine multiple layers into one
+**Implementation:**
+- Analyze release directory structure
+- Separate deps from app code based on `rebar.lock` / `mix.lock`
+- Add `--layering=smart` CLI option (default: single layer for backwards compatibility)
+
+### Priority 3: Non-Root by Default
+
+**Impact:** Security best practice
+
+.NET containers and ko default to non-root for security.
+
+**Implementation:**
+- Default `user/2` to UID 65534 (nobody) when not explicitly set
+- Add `--root` CLI flag to opt-in to root user
+- Document security implications
+
+### Priority 4: Reproducible Builds
+
+**Impact:** Build verification, security audits
+
+ko and jib produce identical images from identical inputs. Currently ocibuild uses `iso8601_now()` for timestamps (non-deterministic).
+
+**Implementation:**
+- Support `SOURCE_DATE_EPOCH` environment variable
+- When set, use epoch timestamp instead of current time
+- Ensure consistent ordering of files in layers
+
+### Priority 5: Auto-Populate OCI Labels
+
+**Impact:** Image provenance, debugging
+
+.NET adds useful labels automatically from build context.
+
+**Implementation:**
+- Auto-detect git repository info
+- Add labels when available:
+  - `org.opencontainers.image.source` — Repository URL
+  - `org.opencontainers.image.revision` — Git commit SHA
+  - `org.opencontainers.image.base.digest` — Base image digest
+- Add `--no-git-labels` flag to disable
+
+### Future Considerations
+
+**Resumable Uploads:**
+- Chunked uploads are implemented but resume capability is not
+- If upload fails mid-way, must restart from beginning
+- Would need session persistence for true resumability
+
+**Zstd Compression:**
+- Defined in media types but not implemented
+- Would need zstd NIF or pure Erlang implementation
+
+**SBOM Generation:**
+- Generate Software Bill of Materials from `rebar.lock` / `mix.lock`
+- Output in SPDX or CycloneDX format
+
+**Image Signing:**
+- Cosign/Notary support for supply chain security
+
+**Layer Squashing:**
+- Combine multiple layers into one for smaller images
 
 ---
 
