@@ -133,23 +133,23 @@ The main public interface. Key types:
 
 **Public Functions:**
 
-| Function | Description | Status |
-|----------|-------------|--------|
-| `from/1`, `from/2`, `from/3` | Start from base image | ✅ Implemented |
-| `scratch/0` | Start from empty image | ✅ Implemented |
-| `add_layer/2` | Add layer with file modes | ✅ Implemented |
-| `copy/3` | Copy files to destination | ✅ Implemented |
-| `entrypoint/2` | Set entrypoint | ✅ Implemented |
-| `cmd/2` | Set CMD | ✅ Implemented |
-| `env/2` | Set environment variables | ✅ Implemented |
-| `workdir/2` | Set working directory | ✅ Implemented |
-| `expose/2` | Expose port | ✅ Implemented |
-| `label/3` | Add config label | ✅ Implemented |
-| `user/2` | Set user | ✅ Implemented |
-| `annotation/3` | Add manifest annotation | ✅ Implemented |
-| `push/3`, `push/4` | Push to registry | ✅ Implemented and tested |
-| `save/2`, `save/3` | Save as tarball | ✅ Implemented and tested |
-| `export/2` | Export as directory | ✅ Implemented and tested |
+| Function                     | Description               | Status                    |
+|------------------------------|---------------------------|---------------------------|
+| `from/1`, `from/2`, `from/3` | Start from base image     | ✅ Implemented            |
+| `scratch/0`                  | Start from empty image    | ✅ Implemented            |
+| `add_layer/2`                | Add layer with file modes | ✅ Implemented            |
+| `copy/3`                     | Copy files to destination | ✅ Implemented            |
+| `entrypoint/2`               | Set entrypoint            | ✅ Implemented            |
+| `cmd/2`                      | Set CMD                   | ✅ Implemented            |
+| `env/2`                      | Set environment variables | ✅ Implemented            |
+| `workdir/2`                  | Set working directory     | ✅ Implemented            |
+| `expose/2`                   | Expose port               | ✅ Implemented            |
+| `label/3`                    | Add config label          | ✅ Implemented            |
+| `user/2`                     | Set user                  | ✅ Implemented            |
+| `annotation/3`               | Add manifest annotation   | ✅ Implemented            |
+| `push/3`, `push/4`           | Push to registry          | ✅ Implemented and tested |
+| `save/2`, `save/3`           | Save as tarball           | ✅ Implemented and tested |
+| `export/2`                   | Export as directory       | ✅ Implemented and tested |
 
 **Image Reference Parsing:**
 
@@ -344,13 +344,13 @@ myimage/
 Implements OCI Distribution Specification for pulling/pushing.
 
 **Supported Registries:**
-| Registry | URL | Auth Method |
-|----------|-----|-------------|
+| Registry   | URL                  | Auth Method                       |
+|------------|----------------------|-----------------------------------|
 | Docker Hub | registry-1.docker.io | Token exchange via auth.docker.io |
-| GHCR | ghcr.io | Bearer token (GITHUB_TOKEN) |
-| GCR | gcr.io | Bearer token |
-| Quay.io | quay.io | Bearer token |
-| Others | https://{registry} | Basic auth or bearer token |
+| GHCR       | ghcr.io              | Bearer token (GITHUB_TOKEN)       |
+| GCR        | gcr.io               | Bearer token                      |
+| Quay.io    | quay.io              | Bearer token                      |
+| Others     | https://{registry}   | Basic auth or bearer token        |
 
 **Key Functions:**
 
@@ -436,24 +436,26 @@ rebar3 eunit --test=ocibuild_tests:test_name_test
 
 ### Test Coverage
 
-| Module | Status |
-|--------|--------|
-| ocibuild_digest | ✅ Tested |
-| ocibuild_json | ✅ Tested |
-| ocibuild_tar | ✅ Tested |
-| ocibuild_layer | ✅ Tested |
-| ocibuild_manifest | ✅ Tested |
-| ocibuild_layout | ✅ Tested |
+| Module            | Status                         |
+|-------------------|--------------------------------|
+| ocibuild_digest   | ✅ Tested                      |
+| ocibuild_json     | ✅ Tested                      |
+| ocibuild_tar      | ✅ Tested                      |
+| ocibuild_layer    | ✅ Tested                      |
+| ocibuild_manifest | ✅ Tested                      |
+| ocibuild_layout   | ✅ Tested                      |
 | ocibuild_registry | ✅ Tested (unit + integration) |
-| ocibuild_cache | ✅ Tested |
-| ocibuild_release | ✅ Tested |
-| ocibuild (API) | ✅ Tested |
+| ocibuild_cache    | ✅ Tested                      |
+| ocibuild_release  | ✅ Tested                      |
+| ocibuild (API)    | ✅ Tested                      |
 
 **Total: 182 Erlang tests + 11 Elixir tests**
 
 ---
 
 ## Roadmap (Prioritized)
+
+Always update this file with new status when we have completed a roadmap task.
 
 ### Priority 1: Multi-Platform Images
 
