@@ -15,7 +15,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 <a href="https://github.com/intility/erlang-oci-builder/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue"/></a>
 </p>
 
-## Features
+## Features 🚀
 
 | Feature                       | Status | Description                                                            |
 |-------------------------------|--------|------------------------------------------------------------------------|
