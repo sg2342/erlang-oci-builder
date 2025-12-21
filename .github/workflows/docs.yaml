@@ -4,6 +4,20 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "LICENSE*"
+      - ".gitignore"
+      - ".editorconfig"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "test/**"
+      - ".github/workflows/ci.yaml"
+      - ".github/workflows/publish.yaml"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE/**"
+      - ".github/CODEOWNERS"
+      - ".github/FUNDING.yml"
+      - ".github/dependabot.yml"
 
 permissions:
   contents: read

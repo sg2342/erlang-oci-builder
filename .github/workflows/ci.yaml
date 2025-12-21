@@ -5,16 +5,32 @@ on:
     branches: [main]
     paths-ignore:
       - "**.md"
-      - "LICENSE"
+      - "LICENSE*"
       - ".gitignore"
+      - ".editorconfig"
       - "docs/**"
+      - ".github/workflows/docs.yaml"
+      - ".github/workflows/publish.yaml"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE/**"
+      - ".github/CODEOWNERS"
+      - ".github/FUNDING.yml"
+      - ".github/dependabot.yml"
   pull_request:
     branches: [main]
     paths-ignore:
       - "**.md"
-      - "LICENSE"
+      - "LICENSE*"
       - ".gitignore"
+      - ".editorconfig"
       - "docs/**"
+      - ".github/workflows/docs.yaml"
+      - ".github/workflows/publish.yaml"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE/**"
+      - ".github/CODEOWNERS"
+      - ".github/FUNDING.yml"
+      - ".github/dependabot.yml"
 
 permissions:
   contents: read
