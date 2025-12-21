@@ -206,7 +206,7 @@ Environment variables:
 ## Common Development Tasks
 
 When building new important features or doing major changes to existing functionality,
-always update `CLAUDE.md` and `AGENTS.md` to reflect the new reality.
+always update `README.md`, `CLAUDE.md` and `AGENTS.md` to reflect the new reality.
 
 ### Add a new image configuration option
 
