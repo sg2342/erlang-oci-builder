@@ -503,6 +503,7 @@ collect_release_files(ReleasePath, Opts) ->
     Workdir = maps:get(workdir, Opts, "/app"),
     try
         Files = collect_files_recursive(ReleasePath, ReleasePath, Workdir),
+        %% Note: Files are sorted in ocibuild_tar:create/2 for reproducibility
         {ok, Files}
     catch
         throw:{file_error, Path, Reason} ->

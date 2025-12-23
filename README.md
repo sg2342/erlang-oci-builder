@@ -27,12 +27,12 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **OCI annotations**           | ✅     | Add custom annotations to image manifests.                             |
 | **Build system integration**  | ✅     | Native rebar3 and Mix task support.                                    |
 | **Multi-platform images**     | ✅     | Build for multiple architectures (amd64, arm64) from a single command. |
-| **Reproducible builds**       | 🔜     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.      |
-| **Smart dependency layering** | 🔜     | Separate layers for ERTS, dependencies, and application code.          |
-| **Non-root by default**       | 🔜     | Run containers as non-root user (UID 65534) for security.              |
-| **Auto OCI annotations**      | 🔜     | Automatically populate source URL and revision from VCS.               |
-| **SBOM generation**           | 🔜     | Generate SPDX Software Bill of Materials embedded in images.           |
-| **Image signing**             | 🔜     | Sign images with ECDSA keys (cosign-compatible format).                |
+| **Reproducible builds**       | ✅     | Identical images from identical inputs using `SOURCE_DATE_EPOCH`.      |
+| **Smart dependency layering** | ⏳     | Separate layers for ERTS, dependencies, and application code.          |
+| **Non-root by default**       | ⏳     | Run containers as non-root user (UID 65534) for security.              |
+| **Auto OCI annotations**      | ⏳     | Automatically populate source URL and revision from VCS.               |
+| **SBOM generation**           | ⏳     | Generate SPDX Software Bill of Materials embedded in images.           |
+| **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                |
 
 ## Installation
 
@@ -411,3 +411,31 @@ Found bundled ERTS in release directory.
 ```
 
 Native code (NIFs) in the release will trigger a warning since `.so` files may not be portable across platforms.
+
+## Reproducible Builds
+
+`ocibuild` supports reproducible builds via the standard `SOURCE_DATE_EPOCH` environment variable.
+When set, all timestamps in the image (config, history, TAR mtimes) use this value instead of current time,
+and files are sorted alphabetically for deterministic ordering.
+
+### Usage
+
+```bash
+# Set to git commit timestamp for reproducible builds
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+rebar3 ocibuild -t myapp:1.0.0 --push ghcr.io/myorg
+
+# Verify reproducibility
+rebar3 ocibuild -t myapp:1.0.0 -o image1.tar.gz
+rebar3 ocibuild -t myapp:1.0.0 -o image2.tar.gz
+sha256sum image1.tar.gz image2.tar.gz  # Should match
+```
+
+### Benefits
+
+- **Build verification**: Rebuild and verify images produce identical content
+- **Security audits**: Confirm published images match source code
+- **Registry deduplication**: Identical content = identical digests = deduplication
+- **Debugging**: Same input always produces same output
+
+See [reproducible-builds.org](https://reproducible-builds.org/docs/source-date-epoch/) for more information.
