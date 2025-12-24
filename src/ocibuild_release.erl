@@ -27,7 +27,8 @@ Security features:
 %% Public API - Image Building
 -export([
     build_image/2,
-    build_image/3
+    build_image/3,
+    build_auto_annotations/3
 ]).
 
 %% Public API - Output Operations (save/push)
@@ -152,8 +153,12 @@ run(AdapterModule, AdapterState, Opts) ->
         %% Start progress manager for parallel multi-line display
         _ = ocibuild_progress:start_manager(),
         PullAuth = get_pull_auth(),
+        %% Get auto-annotation config (vcs_annotations defaults to true)
+        VcsAnnotations = maps:get(vcs_annotations, Config, true),
+        AppVersion = maps:get(app_version, Config, undefined),
         BuildOpts = #{
             release_name => ReleaseName,
+            release_path => ReleasePath,
             workdir => Workdir,
             env => EnvMap,
             expose => ExposePorts,
@@ -161,7 +166,9 @@ run(AdapterModule, AdapterState, Opts) ->
             cmd => Cmd,
             description => Description,
             auth => PullAuth,
-            uid => Uid
+            uid => Uid,
+            vcs_annotations => VcsAnnotations,
+            app_version => AppVersion
         },
         {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
         %% Output the image(s) - this is where layer downloads happen for save
@@ -242,11 +249,20 @@ validate_platform_requirements(_AdapterModule, ReleasePath, Platforms) when leng
 build_platform_images(~"scratch", Files, Platforms, Opts) ->
     %% Scratch base image - create empty images for each platform
     Description = maps:get(description, Opts, undefined),
+    ReleasePath = maps:get(release_path, Opts, ~"."),
     Images = [
         begin
             {ok, BaseImg} = ocibuild:scratch(),
             ImgWithPlatform = BaseImg#{platform => Platform},
-            add_description(configure_release_image(ImgWithPlatform, Files, Opts), Description)
+            %% Build auto-annotations for this image
+            AutoAnnotations = build_auto_annotations(ImgWithPlatform, ReleasePath, Opts),
+            %% Merge with user annotations (user takes precedence)
+            UserAnnotations = maps:get(annotations, Opts, #{}),
+            MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
+            OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
+            add_description(
+                configure_release_image(ImgWithPlatform, Files, OptsWithAnnotations), Description
+            )
         end
      || Platform <- Platforms
     ],
@@ -254,19 +270,37 @@ build_platform_images(~"scratch", Files, Platforms, Opts) ->
 build_platform_images(BaseImage, Files, Platforms, Opts) ->
     PullAuth = maps:get(auth, Opts, #{}),
     Description = maps:get(description, Opts, undefined),
+    ReleasePath = maps:get(release_path, Opts, ~"."),
 
     %% Always use the platforms list - ocibuild:from/3 handles both single and multi
     case ocibuild:from(BaseImage, PullAuth, #{platforms => Platforms}) of
         {ok, BaseImages} when is_list(BaseImages) ->
             %% Apply release files and configuration to each platform image
             ConfiguredImages = [
-                add_description(configure_release_image(BaseImg, Files, Opts), Description)
+                begin
+                    %% Build auto-annotations for this image (includes base image info)
+                    AutoAnnotations = build_auto_annotations(BaseImg, ReleasePath, Opts),
+                    %% Merge with user annotations (user takes precedence)
+                    UserAnnotations = maps:get(annotations, Opts, #{}),
+                    MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
+                    OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
+                    add_description(
+                        configure_release_image(BaseImg, Files, OptsWithAnnotations), Description
+                    )
+                end
              || BaseImg <- BaseImages
             ],
             {ok, ConfiguredImages};
         {ok, SingleImage} ->
             %% Fallback: got single image, configure it
-            Image = add_description(configure_release_image(SingleImage, Files, Opts), Description),
+            AutoAnnotations = build_auto_annotations(SingleImage, ReleasePath, Opts),
+            %% Merge with user annotations (user takes precedence)
+            UserAnnotations = maps:get(annotations, Opts, #{}),
+            MergedAnnotations = maps:merge(AutoAnnotations, UserAnnotations),
+            OptsWithAnnotations = Opts#{annotations => MergedAnnotations},
+            Image = add_description(
+                configure_release_image(SingleImage, Files, OptsWithAnnotations), Description
+            ),
             {ok, [Image]};
         {error, _} = Error ->
             Error
@@ -280,18 +314,103 @@ format_platform(#{os := OS, architecture := Arch} = Platform) ->
         Variant -> <<OS/binary, "/", Arch/binary, "/", Variant/binary>>
     end.
 
+%%%===================================================================
+%%% Auto Annotations
+%%%===================================================================
+
+-doc """
+Build automatic OCI annotations from VCS and build context.
+
+This function creates annotations based on:
+- VCS information (source URL, revision) if vcs_annotations is true
+- Application version from the adapter
+- Build timestamp (respects SOURCE_DATE_EPOCH for reproducible builds)
+- Base image information (name and digest)
+
+The annotations are merged with any user-provided annotations, with user
+annotations taking precedence over auto-generated ones.
+""".
+-spec build_auto_annotations(ocibuild:image(), file:filename(), map()) -> map().
+build_auto_annotations(Image, ReleasePath, Config) ->
+    %% Start with empty annotations
+    Annotations0 = #{},
+
+    %% Add VCS annotations if enabled (default: true)
+    VcsEnabled = maps:get(vcs_annotations, Config, true),
+    Annotations1 =
+        case VcsEnabled of
+            true -> add_vcs_annotations(ReleasePath, Annotations0);
+            false -> Annotations0
+        end,
+
+    %% Add version annotation from app_version
+    Annotations2 =
+        case maps:get(app_version, Config, undefined) of
+            undefined ->
+                Annotations1;
+            Version when is_binary(Version), byte_size(Version) > 0 ->
+                Annotations1#{~"org.opencontainers.image.version" => Version};
+            _ ->
+                Annotations1
+        end,
+
+    %% Add created timestamp (respects SOURCE_DATE_EPOCH for reproducible builds)
+    Annotations3 = Annotations2#{
+        ~"org.opencontainers.image.created" => ocibuild_time:get_iso8601()
+    },
+
+    %% Add base image annotations
+    add_base_image_annotations(Image, Annotations3).
+
+%% @private Add VCS annotations (source URL, revision) from detected VCS
+-spec add_vcs_annotations(file:filename(), map()) -> map().
+add_vcs_annotations(ReleasePath, Annotations) ->
+    case ocibuild_vcs:detect(ReleasePath) of
+        {ok, VcsModule} ->
+            VcsAnnotations = ocibuild_vcs:get_annotations(VcsModule, ReleasePath),
+            maps:merge(Annotations, VcsAnnotations);
+        not_found ->
+            Annotations
+    end.
+
+%% @private Add base image annotations (name and digest)
+-spec add_base_image_annotations(ocibuild:image(), map()) -> map().
+add_base_image_annotations(Image, Annotations) ->
+    case maps:get(base, Image, none) of
+        none ->
+            %% Scratch image, no base annotations
+            Annotations;
+        {Registry, Repo, Tag} ->
+            %% Build base image reference
+            BaseRef = <<Registry/binary, "/", Repo/binary, ":", Tag/binary>>,
+            A1 = Annotations#{~"org.opencontainers.image.base.name" => BaseRef},
+            %% Compute digest from base manifest JSON
+            case maps:get(base_manifest, Image, undefined) of
+                undefined ->
+                    A1;
+                Manifest when is_map(Manifest) ->
+                    ManifestJson = ocibuild_json:encode(Manifest),
+                    Digest = ocibuild_digest:sha256(ManifestJson),
+                    A1#{~"org.opencontainers.image.base.digest" => Digest}
+            end
+    end.
+
+%%%===================================================================
+%%% Image Configuration
+%%%===================================================================
+
 %% @private Configure a release image with files and settings
 %%
 %% This is the single source of truth for image configuration, used by both
 %% the programmatic API (build_image/3) and CLI adapters (run/3).
 %%
 %% Opts:
-%%   - release_name: Release name for entrypoint (default: <<"app">>)
-%%   - workdir: Working directory in container (default: <<"/app">>)
+%%   - release_name: Release name for entrypoint (default: ~"app")
+%%   - workdir: Working directory in container (default: ~"/app")
 %%   - env: Environment variables map (default: #{})
 %%   - expose: Ports to expose (default: [])
 %%   - labels: Image labels map (default: #{})
-%%   - cmd: Release start command (default: <<"foreground">>)
+%%   - cmd: Release start command (default: ~"foreground")
 %%   - uid: User ID to run as (default: 65534 for nobody)
 %%   - annotations: Manifest annotations map (default: #{})
 %%   - description: Image description annotation (default: undefined)
@@ -301,12 +420,12 @@ format_platform(#{os := OS, architecture := Arch} = Platform) ->
     Opts :: map()
 ) -> ocibuild:image().
 configure_release_image(Image0, Files, Opts) ->
-    ReleaseName = maps:get(release_name, Opts, <<"app">>),
-    Workdir = to_binary(maps:get(workdir, Opts, <<"/app">>)),
+    ReleaseName = maps:get(release_name, Opts, ~"app"),
+    Workdir = to_binary(maps:get(workdir, Opts, ~"/app")),
     EnvMap = maps:get(env, Opts, #{}),
     ExposePorts = maps:get(expose, Opts, []),
     Labels = maps:get(labels, Opts, #{}),
-    Cmd = to_binary(maps:get(cmd, Opts, <<"foreground">>)),
+    Cmd = to_binary(maps:get(cmd, Opts, ~"foreground")),
     Description = maps:get(description, Opts, undefined),
     Uid = maps:get(uid, Opts, undefined),
     Annotations = maps:get(annotations, Opts, #{}),
@@ -324,48 +443,56 @@ configure_release_image(Image0, Files, Opts) ->
     Image3 = ocibuild:cmd(Image3a, []),
 
     %% Set environment variables
-    Image4 = case map_size(EnvMap) of
-        0 -> Image3;
-        _ -> ocibuild:env(Image3, EnvMap)
-    end,
+    Image4 =
+        case map_size(EnvMap) of
+            0 -> Image3;
+            _ -> ocibuild:env(Image3, EnvMap)
+        end,
 
     %% Expose ports
     Image5 = lists:foldl(fun(Port, Img) -> ocibuild:expose(Img, Port) end, Image4, ExposePorts),
 
     %% Add labels
-    Image6 = case map_size(Labels) of
-        0 -> Image5;
-        _ -> maps:fold(
-            fun(K, V, Img) -> ocibuild:label(Img, to_binary(K), to_binary(V)) end,
-            Image5,
-            Labels
-        )
-    end,
+    Image6 =
+        case map_size(Labels) of
+            0 ->
+                Image5;
+            _ ->
+                maps:fold(
+                    fun(K, V, Img) -> ocibuild:label(Img, to_binary(K), to_binary(V)) end,
+                    Image5,
+                    Labels
+                )
+        end,
 
     %% Add annotations
-    Image7 = case map_size(Annotations) of
-        0 -> Image6;
-        _ -> maps:fold(
-            fun(K, V, Img) -> ocibuild:annotation(Img, to_binary(K), to_binary(V)) end,
-            Image6,
-            Annotations
-        )
-    end,
+    Image7 =
+        case map_size(Annotations) of
+            0 ->
+                Image6;
+            _ ->
+                maps:fold(
+                    fun(K, V, Img) -> ocibuild:annotation(Img, to_binary(K), to_binary(V)) end,
+                    Image6,
+                    Annotations
+                )
+        end,
 
     %% Set user; when no UID is configured, default to 65534 (nobody) for non-root security
     %% Note: Elixir passes `nil` instead of `undefined` when not configured
-    Image8 = case Uid of
-        undefined ->
-            ocibuild:user(Image7, <<"65534">>);
-        nil ->
-            ocibuild:user(Image7, <<"65534">>);
-        U when is_integer(U), U >= 0 ->
-            ocibuild:user(Image7, integer_to_binary(U));
-        U when is_integer(U), U < 0 ->
-            erlang:error({invalid_uid, U, "UID must be non-negative"});
-        Other ->
-            erlang:error({invalid_uid_type, Other, "UID must be an integer"})
-    end,
+    Image8 =
+        case Uid of
+            undefined ->
+                ocibuild:user(Image7, ~"65534");
+            nil ->
+                ocibuild:user(Image7, ~"65534");
+            U when is_integer(U), U >= 0 ->
+                ocibuild:user(Image7, integer_to_binary(U));
+            U when is_integer(U), U < 0 ->
+                erlang:error({invalid_uid, U, "UID must be non-negative"});
+            Other ->
+                erlang:error({invalid_uid_type, Other, "UID must be an integer"})
+        end,
 
     %% Add description annotation (convenience for OCI description)
     add_description(Image8, Description).
@@ -447,7 +574,7 @@ format_platform_list(Platforms) ->
 %% @private Save multi-platform image
 -spec save_multi_image([ocibuild:image()], string(), map()) -> ok | {error, term()}.
 save_multi_image(Images, OutputPath, Opts) ->
-    Tag = maps:get(tag, Opts, <<"latest">>),
+    Tag = maps:get(tag, Opts, ~"latest"),
     ProgressFn = maps:get(progress, Opts, undefined),
     SaveOpts = #{tag => Tag, progress => ProgressFn},
     ocibuild:save(Images, list_to_binary(OutputPath), SaveOpts).
@@ -575,8 +702,8 @@ Shorthand for `build_image(BaseImage, Files, #{})`.
 
 Example:
 ```
-Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
-{ok, Image} = build_image(<<"scratch">>, Files).
+Files = [{~"/app/bin/myapp", Binary, 8#755}],
+{ok, Image} = build_image(~"scratch", Files).
 ```
 """.
 -spec build_image(BaseImage :: binary(), Files :: [{binary(), binary(), non_neg_integer()}]) ->
@@ -589,11 +716,11 @@ Build an OCI image from release files with options.
 
 Options:
 - `release_name` - Release name (atom, string, or binary) - required for setting entrypoint
-- `workdir` - Working directory in container (default: `<<"/app">>`)
+- `workdir` - Working directory in container (default: `~"/app"`)
 - `env` - Environment variables map (default: `#{}`)
 - `expose` - Ports to expose (default: `[]`)
 - `labels` - Image labels map (default: `#{}`)
-- `cmd` - Release start command (default: `<<"foreground">>`)
+- `cmd` - Release start command (default: `~"foreground"`)
 - `uid` - User ID to run as (default: 65534 for nobody; use 0 for root)
 - `auth` - Authentication credentials for pulling base image
 - `progress` - Progress callback function
@@ -601,13 +728,13 @@ Options:
 
 Example:
 ```
-Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
-{ok, Image} = build_image(<<"debian:stable-slim">>, Files, #{
-    release_name => <<"myapp">>,
-    workdir => <<"/app">>,
-    env => #{<<"LANG">> => <<"C.UTF-8">>},
+Files = [{~"/app/bin/myapp", Binary, 8#755}],
+{ok, Image} = build_image(~"debian:stable-slim", Files, #{
+    release_name => ~"myapp",
+    workdir => ~"/app",
+    env => #{~"LANG" => ~"C.UTF-8"},
     expose => [8080],
-    cmd => <<"foreground">>
+    cmd => ~"foreground"
 }).
 ```
 """.
@@ -618,12 +745,12 @@ Files = [{<<"/app/bin/myapp">>, Binary, 8#755}],
 ) -> {ok, ocibuild:image()} | {error, term()}.
 build_image(BaseImage, Files, Opts) when is_map(Opts) ->
     %% Extract options with defaults
-    ReleaseName = maps:get(release_name, Opts, <<"app">>),
-    Workdir = maps:get(workdir, Opts, <<"/app">>),
+    ReleaseName = maps:get(release_name, Opts, ~"app"),
+    Workdir = maps:get(workdir, Opts, ~"/app"),
     EnvMap = maps:get(env, Opts, #{}),
     ExposePorts = maps:get(expose, Opts, []),
     Labels = maps:get(labels, Opts, #{}),
-    Cmd = maps:get(cmd, Opts, <<"foreground">>),
+    Cmd = maps:get(cmd, Opts, ~"foreground"),
     do_build_image(BaseImage, Files, ReleaseName, Workdir, EnvMap, ExposePorts, Labels, Cmd, Opts).
 
 %%%===================================================================
@@ -919,7 +1046,7 @@ The image is saved in OCI layout format compatible with `podman load`.
 """.
 -spec save_image(ocibuild:image(), file:filename(), map()) -> ok | {error, term()}.
 save_image(Image, OutputPath, Opts) ->
-    Tag = maps:get(tag, Opts, <<"latest">>),
+    Tag = maps:get(tag, Opts, ~"latest"),
     ProgressFn = maps:get(progress, Opts, undefined),
     SaveOpts = #{tag => Tag, progress => ProgressFn},
     ocibuild:save(Image, OutputPath, SaveOpts).
@@ -942,9 +1069,9 @@ push_image(Image, Registry, RepoTag, Auth, Opts) ->
 Parse a tag into repository and tag parts.
 
 Examples:
-- `<<"myapp:1.0.0">>` -> `{<<"myapp">>, <<"1.0.0">>}`
-- `<<"myapp">>` -> `{<<"myapp">>, <<"latest">>}`
-- `<<"ghcr.io/org/app:v1">>` -> `{<<"ghcr.io/org/app">>, <<"v1">>}`
+- `~"myapp:1.0.0"` -> `{~"myapp", ~"1.0.0"}`
+- `~"myapp"` -> `{~"myapp", ~"latest"}`
+- `~"ghcr.io/org/app:v1"` -> `{~"ghcr.io/org/app", ~"v1"}`
 """.
 -spec parse_tag(binary()) -> {Repo :: binary(), Tag :: binary()}.
 parse_tag(Tag) ->
@@ -971,10 +1098,10 @@ parse_tag(Tag) ->
 Parse a push destination into registry host and namespace.
 
 Examples:
-- `<<"ghcr.io/intility">>` -> `{<<"ghcr.io">>, <<"intility">>}`
-- `<<"ghcr.io">>` -> `{<<"ghcr.io">>, <<>>}`
-- `<<"docker.io/myorg">>` -> `{<<"docker.io">>, <<"myorg">>}`
-- `<<"localhost:5000/myorg">>` -> `{<<"localhost:5000">>, <<"myorg">>}`
+- `~"ghcr.io/intility"` -> `{~"ghcr.io", ~"intility"}`
+- `~"ghcr.io"` -> `{~"ghcr.io", <<>>}`
+- `~"docker.io/myorg"` -> `{~"docker.io", ~"myorg"}`
+- `~"localhost:5000/myorg"` -> `{~"localhost:5000", ~"myorg"}`
 """.
 -spec parse_push_destination(binary()) -> {Registry :: binary(), Namespace :: binary()}.
 parse_push_destination(Dest) ->
@@ -1366,7 +1493,7 @@ Returns `{ok, []}` if no native code found, or
 
 ```
 {ok, []} = ocibuild_release:check_for_native_code("/path/to/release").
-{warning, [#{app := <<"crypto">>, file := <<"crypto_nif.so">>}]} =
+{warning, [#{app := ~"crypto", file := ~"crypto_nif.so"}]} =
     ocibuild_release:check_for_native_code("/path/to/release_with_nifs").
 ```
 """.

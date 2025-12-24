@@ -24,11 +24,11 @@ is provided by `ocibuild_release`.
 
 get_config(State) ->
     %% Extract and normalize config from your build system
-    #{base_image => <<"debian:stable-slim">>, ...}.
+    #{base_image => ~"debian:stable-slim", ...}.
 
 find_release(State, Opts) ->
     %% Find the release directory
-    {ok, <<"myapp">>, "/path/to/release"}.
+    {ok, ~"myapp", "/path/to/release"}.
 
 info(Format, Args) ->
     %% Log info message
@@ -71,7 +71,7 @@ error(Format, Args) ->
 %%%===================================================================
 
 -type config() :: #{
-    %% Base image to use (e.g., <<"debian:stable-slim">>)
+    %% Base image to use (e.g., ~"debian:stable-slim")
     base_image => binary(),
     %% Working directory in container (default: /app)
     workdir => binary(),
@@ -81,20 +81,24 @@ error(Format, Args) ->
     expose => [non_neg_integer()],
     %% Labels to add to image config
     labels => #{binary() => binary()},
-    %% Release start command (e.g., <<"foreground">> for Erlang, <<"start">> for Elixir)
+    %% Release start command (e.g., ~"foreground" for Erlang, ~"start" for Elixir)
     cmd => binary(),
     %% Image description (OCI annotation)
     description => binary() | undefined,
-    %% Image tag (e.g., <<"myapp:1.0.0">>)
+    %% Image tag (e.g., ~"myapp:1.0.0")
     tag => binary() | undefined,
     %% Output tarball path
     output => binary() | undefined,
-    %% Registry to push to (e.g., <<"ghcr.io/myorg">>)
+    %% Registry to push to (e.g., ~"ghcr.io/myorg")
     push => binary() | undefined,
     %% Chunk size for uploads in bytes
     chunk_size => pos_integer() | undefined,
     %% User ID to run as (default: 65534 for nobody)
-    uid => non_neg_integer() | undefined
+    uid => non_neg_integer() | undefined,
+    %% Application version for org.opencontainers.image.version annotation
+    app_version => binary() | undefined,
+    %% Enable/disable automatic VCS annotations (default: true)
+    vcs_annotations => boolean()
 }.
 
 -export_type([config/0]).
@@ -143,6 +147,45 @@ Log an error message.
 Used for error conditions that should be displayed to the user.
 """.
 -callback error(Format :: io:format(), Args :: [term()]) -> ok.
+
+-doc """
+Get the application version from the build system.
+
+This is an optional callback. If not implemented, the version annotation
+will not be added to the image. Adapters can implement this to provide
+the application version for the `org.opencontainers.image.version` annotation.
+
+For rebar3: Parse the `.app.src` file or relx config for version.
+For Mix: Return `Mix.Project.config()[:version]`.
+""".
+-callback get_app_version(State :: term()) -> binary() | undefined.
+
+%% Mark get_app_version as optional - adapters don't have to implement it
+-optional_callbacks([get_app_version/1]).
+
+%%%===================================================================
+%%% Helper Functions
+%%%===================================================================
+
+-export([get_app_version/2]).
+
+-doc """
+Get application version from an adapter, with fallback for optional callback.
+
+If the adapter implements `get_app_version/1`, calls it and returns the result.
+If not implemented, returns `undefined`.
+
+Example:
+```erlang
+Version = ocibuild_adapter:get_app_version(ocibuild_rebar3, State).
+```
+""".
+-spec get_app_version(module(), term()) -> binary() | undefined.
+get_app_version(Adapter, State) ->
+    case erlang:function_exported(Adapter, get_app_version, 1) of
+        true -> Adapter:get_app_version(State);
+        false -> undefined
+    end.
 
 %%%===================================================================
 %%% Constant accessors
