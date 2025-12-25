@@ -63,7 +63,7 @@ The easiest way to use `ocibuild` with Elixir:
 ```elixir
 # mix.exs
 def deps do
-  [{:ocibuild, "~> 0.1"}]
+  [{:ocibuild, "~> 0.4"}]
 end
 
 def project do
@@ -113,7 +113,7 @@ The easiest way to use `ocibuild` with Erlang:
 
 ```erlang
 %% rebar.config
-{deps, [{ocibuild, "~> 0.1"}]}.
+{deps, [{ocibuild, "~> 0.4"}]}.
 
 {ocibuild, [
     {base_image, "debian:stable-slim"},
