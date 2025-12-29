@@ -90,6 +90,99 @@ tar_path_traversal_test() ->
         TraversalPaths
     ).
 
+tar_null_byte_injection_test() ->
+    %% Paths with null bytes should raise error (security vulnerability)
+    NullPaths = [
+        <<"/app/file.txt", 0, ".evil">>,
+        <<"/app/", 0, "passwd">>,
+        <<0, "/etc/shadow">>
+    ],
+    lists:foreach(
+        fun(Path) ->
+            Files = [{Path, ~"content", 8#644}],
+            ?assertError(
+                {null_byte, _},
+                ocibuild_tar:create(Files)
+            )
+        end,
+        NullPaths
+    ).
+
+tar_empty_path_test() ->
+    %% Empty paths should raise error
+    Files = [{<<>>, ~"content", 8#644}],
+    ?assertError(
+        {empty_path, _},
+        ocibuild_tar:create(Files)
+    ).
+
+tar_invalid_mode_test() ->
+    %% Invalid modes should raise error
+    InvalidModes = [
+        %% Negative
+        -1,
+        %% Exceeds 7777 octal
+        8#10000,
+        %% Way too large
+        16#FFFF
+    ],
+    lists:foreach(
+        fun(Mode) ->
+            Files = [{~"/app/file.txt", ~"content", Mode}],
+            ?assertError(
+                {invalid_mode, Mode},
+                ocibuild_tar:create(Files)
+            )
+        end,
+        InvalidModes
+    ).
+
+tar_valid_mode_edge_cases_test() ->
+    %% Valid mode edge cases should work
+    ValidModes = [
+        %% Minimum
+        0,
+        %% Common file mode
+        8#644,
+        %% Common executable mode
+        8#755,
+        %% Maximum (with setuid, setgid, sticky)
+        8#7777
+    ],
+    lists:foreach(
+        fun(Mode) ->
+            Files = [{~"/app/file.txt", ~"content", Mode}],
+            Tar = ocibuild_tar:create(Files),
+            ?assertEqual(0, byte_size(Tar) rem 512)
+        end,
+        ValidModes
+    ).
+
+tar_duplicate_paths_test() ->
+    %% Duplicate paths should raise error (reports normalized path)
+    Files = [
+        {~"/app/file.txt", ~"content1", 8#644},
+        {~"/app/other.txt", ~"content2", 8#644},
+        %% Duplicate!
+        {~"/app/file.txt", ~"content3", 8#644}
+    ],
+    ?assertError(
+        {duplicate_paths, [~"./app/file.txt"]},
+        ocibuild_tar:create(Files)
+    ).
+
+tar_duplicate_paths_after_normalization_test() ->
+    %% Paths that normalize to the same value should be detected as duplicates
+    %% "/app/file.txt" and "app/file.txt" both normalize to "./app/file.txt"
+    Files = [
+        {~"/app/file.txt", ~"content1", 8#644},
+        {~"app/file.txt", ~"content2", 8#644}
+    ],
+    ?assertError(
+        {duplicate_paths, [~"./app/file.txt"]},
+        ocibuild_tar:create(Files)
+    ).
+
 %%%===================================================================
 %%% Layer tests
 %%%===================================================================
@@ -197,34 +290,49 @@ multiple_layers_test() ->
 %%% Layout tests
 %%%===================================================================
 
-export_directory_test() ->
+%% Setup/cleanup for layout tests that need temp directories
+setup_layout_tempdir() ->
+    make_temp_dir("ocibuild_layout_test").
+
+cleanup_layout_tempdir(TmpDir) ->
+    cleanup_temp_dir(TmpDir).
+
+layout_export_test_() ->
+    {foreach, fun setup_layout_tempdir/0, fun cleanup_layout_tempdir/1, [
+        fun(TmpDir) ->
+            {"export to directory", fun() -> export_directory_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"export multiple layers", fun() -> export_multiple_layers_test(TmpDir) end}
+        end,
+        fun(TmpDir) ->
+            {"export with config", fun() -> export_with_config_test(TmpDir) end}
+        end
+    ]}.
+
+export_directory_test(TmpDir) ->
     {ok, Image0} = ocibuild:scratch(),
     Image1 = ocibuild:add_layer(Image0, [{~"/test.txt", ~"hello", 8#644}]),
     Image2 = ocibuild:entrypoint(Image1, [~"/bin/sh"]),
 
-    TmpDir = make_temp_dir("ocibuild_test_export"),
-    try
-        ok = ocibuild:export(Image2, TmpDir),
+    ok = ocibuild:export(Image2, TmpDir),
 
-        %% Check required files exist
-        ?assert(
-            filelib:is_file(
-                filename:join(TmpDir, "oci-layout")
-            )
-        ),
-        ?assert(
-            filelib:is_file(
-                filename:join(TmpDir, "index.json")
-            )
-        ),
-        ?assert(
-            filelib:is_dir(
-                filename:join([TmpDir, "blobs", "sha256"])
-            )
+    %% Check required files exist
+    ?assert(
+        filelib:is_file(
+            filename:join(TmpDir, "oci-layout")
         )
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    ),
+    ?assert(
+        filelib:is_file(
+            filename:join(TmpDir, "index.json")
+        )
+    ),
+    ?assert(
+        filelib:is_dir(
+            filename:join([TmpDir, "blobs", "sha256"])
+        )
+    ).
 
 save_tarball_test() ->
     {ok, Image0} = ocibuild:scratch(),
@@ -559,6 +667,87 @@ tar_safe_dots_test() ->
     Tar = ocibuild_tar:create(Files),
     ?assertEqual(0, byte_size(Tar) rem 512).
 
+tar_pax_long_filename_test() ->
+    %% Test filename > 100 bytes that cannot be split (requires PAX header)
+    %% This simulates the AshAuthentication issue from GitHub #21
+    LongFilename =
+        <<"Elixir.AshAuthentication.Strategy.Password.Authentication.",
+            "Strategies.Password.Resettable.Options.beam">>,
+    ?assert(byte_size(LongFilename) > 100),
+    Path = <<"/app/lib/myapp/ebin/", LongFilename/binary>>,
+    Content = <<"BEAM content here">>,
+    Files = [{Path, Content, 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    %% Archive should be valid (multiple of 512)
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    %% Should contain PAX header (typeflag 'x')
+    ?assertNotEqual(nomatch, binary:match(Tar, <<"path=">>)),
+    %% Should contain the full filename in PAX data
+    ?assertNotEqual(nomatch, binary:match(Tar, LongFilename)).
+
+%% PAX extraction test fixture
+setup_pax_tempdir() ->
+    make_temp_dir("pax_test").
+
+cleanup_pax_tempdir(TmpDir) ->
+    cleanup_temp_dir(TmpDir).
+
+tar_pax_extraction_test_() ->
+    {foreach, fun setup_pax_tempdir/0, fun cleanup_pax_tempdir/1, [
+        fun(TmpDir) ->
+            {"PAX extracts correctly", fun() -> tar_pax_extracts_correctly_test(TmpDir) end}
+        end
+    ]}.
+
+tar_pax_extracts_correctly_test(TmpDir) ->
+    %% Verify PAX archive can be extracted by system tar
+    LongFilename =
+        <<"Elixir.VeryLongModuleName.WithMany.Nested.Modules.",
+            "That.Exceed.The.Hundred.Byte.Limit.In.Ustar.beam">>,
+    Path = <<"/app/lib/myapp/ebin/", LongFilename/binary>>,
+    Content = <<"test content 12345">>,
+    Files = [{Path, Content, 8#644}],
+    Tar = ocibuild_tar:create(Files),
+
+    %% Write tar and extract with system tar
+    TarFile = filename:join(TmpDir, "test.tar"),
+    ok = file:write_file(TarFile, Tar),
+    Cmd = "tar -xf " ++ TarFile ++ " -C " ++ TmpDir,
+    _ = os:cmd(Cmd),
+
+    %% Verify extracted file exists and has correct content
+    ExtractedPath = filename:join([
+        TmpDir,
+        ".",
+        "app",
+        "lib",
+        "myapp",
+        "ebin",
+        binary_to_list(LongFilename)
+    ]),
+    ?assert(filelib:is_regular(ExtractedPath)),
+    ?assertEqual({ok, Content}, file:read_file(ExtractedPath)).
+
+tar_pax_very_long_path_test() ->
+    %% Test extremely long path (> 255 bytes, exceeds ustar entirely)
+    DeepPath = binary:copy(<<"very_long_directory_name/">>, 15),
+    Filename = <<"file.txt">>,
+    Path = <<"/", DeepPath/binary, Filename/binary>>,
+    ?assert(byte_size(Path) > 255),
+    Content = <<"deep content">>,
+    Files = [{Path, Content, 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    ?assertNotEqual(nomatch, binary:match(Tar, <<"path=">>)).
+
+tar_ustar_still_used_when_possible_test() ->
+    %% Verify short paths don't use PAX (efficiency)
+    Files = [{~"/short/path.txt", ~"content", 8#644}],
+    Tar = ocibuild_tar:create(Files),
+    ?assertEqual(0, byte_size(Tar) rem 512),
+    %% Should NOT contain PAX header for short paths
+    ?assertEqual(nomatch, binary:match(Tar, <<"path=">>)).
+
 %%%===================================================================
 %%% Additional Digest tests
 %%%===================================================================
@@ -887,26 +1076,21 @@ save_tarball_with_tag_test() ->
         file:delete(TmpFile)
     end.
 
-export_multiple_layers_test() ->
+export_multiple_layers_test(TmpDir) ->
     {ok, Image0} = ocibuild:scratch(),
     Image1 = ocibuild:add_layer(Image0, [{~"/file1.txt", ~"content1", 8#644}]),
     Image2 = ocibuild:add_layer(Image1, [{~"/file2.txt", ~"content2", 8#644}]),
     Image3 = ocibuild:entrypoint(Image2, [~"/bin/sh"]),
 
-    TmpDir = make_temp_dir("ocibuild_test_multi"),
-    try
-        ok = ocibuild:export(Image3, TmpDir),
+    ok = ocibuild:export(Image3, TmpDir),
 
-        %% Verify blobs directory has multiple files
-        BlobsDir = filename:join([TmpDir, "blobs", "sha256"]),
-        {ok, Files} = file:list_dir(BlobsDir),
-        %% Should have config + manifest + 2 layers = 4 blobs
-        ?assertEqual(4, length(Files))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    %% Verify blobs directory has multiple files
+    BlobsDir = filename:join([TmpDir, "blobs", "sha256"]),
+    {ok, Files} = file:list_dir(BlobsDir),
+    %% Should have config + manifest + 2 layers = 4 blobs
+    ?assertEqual(4, length(Files)).
 
-export_with_config_test() ->
+export_with_config_test(TmpDir) ->
     %% Test export with full configuration
     {ok, Image0} = ocibuild:scratch(),
     Image1 = ocibuild:add_layer(Image0, [{~"/app", ~"binary", 8#755}]),
@@ -918,13 +1102,8 @@ export_with_config_test() ->
     Image7 = ocibuild:label(Image6, ~"version", ~"1.0"),
     Image8 = ocibuild:user(Image7, ~"app"),
 
-    TmpDir = make_temp_dir("ocibuild_test_fullconfig"),
-    try
-        ok = ocibuild:export(Image8, TmpDir),
-        ?assert(filelib:is_file(filename:join(TmpDir, "index.json")))
-    after
-        cleanup_temp_dir(TmpDir)
-    end.
+    ok = ocibuild:export(Image8, TmpDir),
+    ?assert(filelib:is_file(filename:join(TmpDir, "index.json"))).
 
 %%%===================================================================
 %%% Registry retry tests
