@@ -1259,33 +1259,19 @@ push_app_layers_parallel(Image, BaseUrl, Repo, Token, Opts) ->
     end.
 
 %% Create a label for layer upload progress
-%% Pads label to fixed width so progress bars align
-%% Width of 40 accommodates labels like "Layer 10/10 (deps, linux/arm64/v8)"
--define(LABEL_WIDTH, 40).
-
 -spec make_upload_label(
     pos_integer(), pos_integer(), ocibuild:platform() | undefined, atom() | undefined
 ) -> binary().
 make_upload_label(Index, Total, undefined, undefined) ->
-    pad_label(io_lib:format("Layer ~B/~B", [Index, Total]));
+    iolist_to_binary(io_lib:format("Layer ~B/~B", [Index, Total]));
 make_upload_label(Index, Total, undefined, LayerType) ->
-    pad_label(io_lib:format("Layer ~B/~B (~s)", [Index, Total, LayerType]));
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s)", [Index, Total, LayerType]));
 make_upload_label(Index, Total, Platform, undefined) ->
     Arch = get_platform_arch(Platform),
-    pad_label(io_lib:format("Layer ~B/~B (~s)", [Index, Total, Arch]));
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s)", [Index, Total, Arch]));
 make_upload_label(Index, Total, Platform, LayerType) ->
     Arch = get_platform_arch(Platform),
-    pad_label(io_lib:format("Layer ~B/~B (~s, ~s)", [Index, Total, LayerType, Arch])).
-
-%% Pad label to fixed width for alignment
--spec pad_label(iolist()) -> binary().
-pad_label(Label) ->
-    Bin = iolist_to_binary(Label),
-    Len = byte_size(Bin),
-    case Len < ?LABEL_WIDTH of
-        true -> <<Bin/binary, (binary:copy(~" ", ?LABEL_WIDTH - Len))/binary>>;
-        false -> Bin
-    end.
+    iolist_to_binary(io_lib:format("Layer ~B/~B (~s, ~s)", [Index, Total, LayerType, Arch])).
 
 %% Push base image layers to target registry in parallel
 -spec push_base_layers(ocibuild:image(), string(), binary(), binary(), push_opts()) ->
