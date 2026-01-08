@@ -19,6 +19,7 @@ See: https://github.com/opencontainers/distribution-spec
     push_blobs_multi/5, push_blobs_multi/6,
     push_referrer/7, push_referrer/8,
     check_blob_exists/4,
+    tag_from_digest/5,
     stop_httpc/0
 ]).
 
@@ -28,11 +29,13 @@ See: https://github.com/opencontainers/distribution-spec
 %% Platform detection (shared with ocibuild_release)
 -export([get_target_platform/0]).
 
-%% Export internal HTTP functions (used via ?MODULE: for mockability in tests)
+%% Internal HTTP functions - exported for ?MODULE: calls (enables mocking in tests)
 -export([http_get/2, http_head/2, http_post/3, http_patch/4, http_put/3, http_put/4]).
+-export([http_get_with_content_type/2]).
 
-%% Export internal functions for testing
+%% Internal functions - exported for ?MODULE: calls (enables mocking in tests)
 -export([push_blob/5, push_blob/6, format_content_range/2, parse_range_header/1]).
+-export([discover_auth/3]).
 
 %% Progress callback types
 -type progress_phase() :: manifest | config | layer | uploading.
@@ -569,6 +572,82 @@ push_image_index(BaseUrl, Repo, Tag, Token, ManifestDescriptors) ->
             {ok, IndexDigest};
         {error, _} = Err ->
             Err
+    end.
+
+%%%===================================================================
+%%% Tag existing manifest with new tag
+%%%===================================================================
+
+-doc """
+Tag an existing manifest with a new tag.
+
+This function fetches a manifest by its digest from the registry and
+pushes it to a new tag. This is efficient because it doesn't re-upload
+blobs - it only creates a new tag reference to the same manifest.
+
+This is used to push an image with multiple tags: the first tag does
+a full push (blobs + manifest), and additional tags use this function
+to just create new tag references.
+""".
+-spec tag_from_digest(binary(), binary(), binary(), binary(), map()) ->
+    {ok, binary()} | {error, term()}.
+tag_from_digest(Registry, Repo, Digest, Tag, Auth) ->
+    BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
+
+    %% Discover auth token with push scope (uses ?MODULE: for testability)
+    Token = case ?MODULE:discover_auth(Registry, NormalizedRepo, Auth) of
+        {ok, T} -> T;
+        {error, _} -> none
+    end,
+
+    %% Fetch manifest by digest with multiple Accept types
+    %% We accept both image manifest and index manifest
+    FetchUrl = io_lib:format(
+        "~s/v2/~s/manifests/~s",
+        [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Digest)]
+    ),
+    AcceptHeader = {"Accept", "application/vnd.oci.image.manifest.v1+json, "
+                              "application/vnd.oci.image.index.v1+json, "
+                              "application/vnd.docker.distribution.manifest.v2+json, "
+                              "application/vnd.docker.distribution.manifest.list.v2+json"},
+    FetchHeaders = auth_headers(Token) ++ [AcceptHeader],
+
+    case ?MODULE:http_get_with_content_type(lists:flatten(FetchUrl), FetchHeaders) of
+        {ok, ManifestData, ContentType} ->
+            %% Push to new tag with same content type
+            PushUrl = io_lib:format(
+                "~s/v2/~s/manifests/~s",
+                [BaseUrl, binary_to_list(NormalizedRepo), binary_to_list(Tag)]
+            ),
+            PushHeaders = auth_headers(Token) ++ [{"Content-Type", ContentType}],
+            case ?MODULE:http_put(lists:flatten(PushUrl), PushHeaders, ManifestData) of
+                {ok, _} ->
+                    {ok, Digest};
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @private HTTP GET that also returns the Content-Type header
+-spec http_get_with_content_type(string(), [{string(), string()}]) ->
+    {ok, binary(), string()} | {error, term()}.
+http_get_with_content_type(Url, Headers) ->
+    Profile = get_httpc_profile(),
+    Request = {Url, Headers},
+    HttpOpts = [{timeout, ?DEFAULT_TIMEOUT}, {ssl, ssl_opts()}],
+    Opts = [{body_format, binary}],
+    case httpc:request(get, Request, HttpOpts, Opts, Profile) of
+        {ok, {{_, 200, _}, RespHeaders, Body}} ->
+            ContentType = proplists:get_value("content-type", normalize_headers(RespHeaders),
+                                              "application/vnd.oci.image.manifest.v1+json"),
+            {ok, Body, ContentType};
+        {ok, {{_, Code, Reason}, _, Body}} ->
+            {error, {http_error, Code, Reason, Body}};
+        {error, Reason} ->
+            {error, {request_failed, Reason}}
     end.
 
 %%%===================================================================
