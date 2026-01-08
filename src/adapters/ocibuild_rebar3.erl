@@ -66,6 +66,27 @@ export OCIBUILD_PULL_PASSWORD="pass"
 -behaviour(provider).
 -behaviour(ocibuild_adapter).
 
+%% eqWalizer suppressions - rebar3 internals (provider, rebar_state, rebar_api)
+%% are only available at runtime when loaded as a plugin.
+-eqwalizer({nowarn_function, init/1}).
+-eqwalizer({nowarn_function, do/1}).
+-eqwalizer({nowarn_function, do_push_tarball/3}).
+-eqwalizer({nowarn_function, get_config/1}).
+-eqwalizer({nowarn_function, get_app_version/1}).
+-eqwalizer({nowarn_function, get_dependencies/1}).
+-eqwalizer({nowarn_function, find_release/2}).
+-eqwalizer({nowarn_function, get_base_image/2}).
+-eqwalizer({nowarn_function, get_app_name/2}).
+-eqwalizer({nowarn_function, get_project_app_name/1}).
+-eqwalizer({nowarn_function, get_description/2}).
+-eqwalizer({nowarn_function, get_tags/2}).
+-eqwalizer({nowarn_function, get_output/1}).
+-eqwalizer({nowarn_function, get_sbom_path/1}).
+-eqwalizer({nowarn_function, get_sign_key/2}).
+-eqwalizer({nowarn_function, get_push_registry/1}).
+-eqwalizer({nowarn_function, get_platform/2}).
+-eqwalizer({nowarn_function, parse_rebar_lock/1}).
+
 %% Provider callbacks
 -export([init/1, do/1, format_error/1]).
 
@@ -115,7 +136,9 @@ init(State) ->
                 {uid, undefined, "uid", integer, "User ID to run as (default: 65534)"},
                 {no_vcs_annotations, undefined, "no-vcs-annotations", boolean,
                     "Disable automatic VCS annotations"},
-                {sbom, undefined, "sbom", string, "Export SBOM to file path"}
+                {sbom, undefined, "sbom", string, "Export SBOM to file path"},
+                {sign_key, undefined, "sign-key", string,
+                    "Path to cosign private key for image signing"}
             ]},
             {profiles, [default, prod]}
         ]),
@@ -274,7 +297,8 @@ get_config(State) ->
         %% In Erlang, release name usually matches app name, but can be set explicitly
         app_name => get_app_name(State, Config),
         vcs_annotations => get_vcs_annotations(Args, Config),
-        sbom => get_sbom_path(Args)
+        sbom => get_sbom_path(Args),
+        sign_key => get_sign_key(Args, Config)
     }.
 
 %% @private Get app_name for layer classification
@@ -314,15 +338,16 @@ get_description(Args, Config) ->
             list_to_binary(Descr)
     end.
 
-%% @private Get tags from args (supports multiple -t flags) or config
-%% Config `tag` can be a single string or a list of strings
+%% @private Get tags as a list of binaries from args or config
+%% Args: collects all values for `tag` (supports one or many -t flags)
+%% Config: `tag` can be a single string/binary or a list of such values
 get_tags(Args, Config) ->
     case proplists:get_all_values(tag, Args) of
         [] ->
-            %% No CLI tags, check config
+            %% No CLI tags, check config (and normalize to binary list)
             normalize_tags(proplists:get_value(tag, Config, []));
         TagStrs ->
-            %% CLI tags override config
+            %% CLI tags (all -t occurrences) override config
             [list_to_binary(T) || T <- TagStrs]
     end.
 
@@ -361,6 +386,25 @@ get_sbom_path(Args) ->
     case proplists:get_value(sbom, Args) of
         undefined -> undefined;
         Path -> list_to_binary(Path)
+    end.
+
+%% @private Get sign key path from args, env, or config
+%% Priority: CLI --sign-key > OCIBUILD_SIGN_KEY env > config sign_key
+get_sign_key(Args, Config) ->
+    case proplists:get_value(sign_key, Args) of
+        undefined ->
+            case os:getenv("OCIBUILD_SIGN_KEY") of
+                false ->
+                    case proplists:get_value(sign_key, Config) of
+                        undefined -> undefined;
+                        Path when is_list(Path) -> list_to_binary(Path);
+                        Path when is_binary(Path) -> Path
+                    end;
+                EnvPath ->
+                    list_to_binary(EnvPath)
+            end;
+        Path ->
+            list_to_binary(Path)
     end.
 
 %% @private Get push registry from args

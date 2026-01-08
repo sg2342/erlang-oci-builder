@@ -18,6 +18,8 @@ See: https://github.com/opencontainers/distribution-spec
     push_blobs/5, push_blobs/6,
     push_blobs_multi/5, push_blobs_multi/6,
     push_referrer/7, push_referrer/8,
+    push_signature/7, push_signature/8,
+    digest_to_signature_tag/1,
     check_blob_exists/4,
     tag_from_digest/5,
     stop_httpc/0
@@ -36,6 +38,11 @@ See: https://github.com/opencontainers/distribution-spec
 %% Internal functions - exported for ?MODULE: calls (enables mocking in tests)
 -export([push_blob/5, push_blob/6, format_content_range/2, parse_range_header/1]).
 -export([discover_auth/3]).
+
+%% Security functions - exported for testing
+-ifdef(TEST).
+-export([sanitize_error_body/1, redact_sensitive/1]).
+-endif.
 
 %% Progress callback types
 -type progress_phase() :: manifest | config | layer | uploading.
@@ -645,7 +652,8 @@ http_get_with_content_type(Url, Headers) ->
                                               "application/vnd.oci.image.manifest.v1+json"),
             {ok, Body, ContentType};
         {ok, {{_, Code, Reason}, _, Body}} ->
-            {error, {http_error, Code, Reason, Body}};
+            %% Sanitize error body to prevent credential leakage
+            {error, {http_error, Code, Reason, sanitize_error_body(Body)}};
         {error, Reason} ->
             {error, {request_failed, Reason}}
     end.
@@ -1000,6 +1008,127 @@ is_unsupported_manifest_error(Body) when is_list(Body) ->
     string:find(LowerBody, "unsupported") =/= nomatch orelse
         string:find(LowerBody, "not supported") =/= nomatch orelse
         string:find(LowerBody, "unknown manifest") =/= nomatch.
+
+%%%===================================================================
+%%% Cosign Signature Push
+%%%===================================================================
+
+-doc """
+Push a cosign-compatible signature as a referrer to an image manifest.
+
+The signature is attached using the OCI referrers API with:
+- artifactType: application/vnd.dev.cosign.simplesigning.v1+json
+- Signature stored as base64 in layer annotation
+- Payload stored as config blob
+
+Returns ok on success, or {error, {referrer_not_supported, _}} if the
+registry doesn't support the referrers API.
+""".
+-spec push_signature(
+    PayloadJson :: binary(),
+    Signature :: binary(),
+    Registry :: binary(),
+    Repo :: binary(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer(),
+    Auth :: map()
+) -> ok | {error, term()}.
+push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSize, Auth) ->
+    push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSize, Auth, #{}).
+
+-doc "Push a cosign signature with options.".
+-spec push_signature(
+    PayloadJson :: binary(),
+    Signature :: binary(),
+    Registry :: binary(),
+    Repo :: binary(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer(),
+    Auth :: map(),
+    Opts :: push_opts()
+) -> ok | {error, term()}.
+push_signature(PayloadJson, Signature, Registry, Repo, SubjectDigest, SubjectSize, Auth, _Opts) ->
+    BaseUrl = registry_url(Registry),
+    NormalizedRepo = normalize_repo(Registry, Repo),
+
+    case get_auth_token(Registry, NormalizedRepo, Auth) of
+        {ok, Token} ->
+            %% Push the payload blob (simplesigning JSON)
+            PayloadDigest = ocibuild_digest:sha256(PayloadJson),
+            PayloadSize = byte_size(PayloadJson),
+
+            case push_blob(BaseUrl, NormalizedRepo, PayloadDigest, PayloadJson, Token) of
+                ok ->
+                    %% Build and push the signature referrer manifest
+                    push_signature_manifest(
+                        BaseUrl,
+                        NormalizedRepo,
+                        Token,
+                        PayloadDigest,
+                        PayloadSize,
+                        Signature,
+                        SubjectDigest,
+                        SubjectSize
+                    );
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @private Build and push a cosign signature manifest using tag scheme.
+%% Cosign uses tag-based discovery by default: sha256-<hex>.sig
+%% See: https://github.com/sigstore/cosign/blob/main/pkg/oci/remote/remote.go
+-spec push_signature_manifest(
+    BaseUrl :: string(),
+    Repo :: binary(),
+    Token :: term(),
+    PayloadDigest :: binary(),
+    PayloadSize :: non_neg_integer(),
+    Signature :: binary(),
+    SubjectDigest :: binary(),
+    SubjectSize :: non_neg_integer()
+) -> ok | {error, term()}.
+push_signature_manifest(
+    BaseUrl, Repo, Token, PayloadDigest, PayloadSize, Signature, SubjectDigest, _SubjectSize
+) ->
+    %% Build manifest using ocibuild_sign (for cosign compatibility)
+    Manifest = ocibuild_sign:build_signature_manifest(PayloadDigest, PayloadSize, Signature),
+    ManifestJson = ocibuild_json:encode(Manifest),
+
+    %% Cosign tag scheme: sha256-<hex>.sig
+    %% SubjectDigest is like "sha256:bb7294..." -> tag is "sha256-bb7294....sig"
+    SignatureTag = digest_to_signature_tag(SubjectDigest),
+
+    %% Push the manifest to the signature tag
+    Url = io_lib:format(
+        "~s/v2/~s/manifests/~s",
+        [BaseUrl, binary_to_list(Repo), binary_to_list(SignatureTag)]
+    ),
+    Headers =
+        auth_headers(Token) ++
+            [{"Content-Type", "application/vnd.oci.image.manifest.v1+json"}],
+
+    case ?MODULE:http_put(lists:flatten(Url), Headers, ManifestJson) of
+        {ok, _} ->
+            ok;
+        {error, _} = Err ->
+            Err
+    end.
+
+%% @private Convert a digest to cosign signature tag format.
+%% sha256:abc123... -> sha256-abc123....sig
+-spec digest_to_signature_tag(binary()) -> binary().
+digest_to_signature_tag(Digest) ->
+    %% Replace : with - and append .sig
+    case binary:split(Digest, <<":">>) of
+        [Algorithm, Hex] ->
+            <<Algorithm/binary, "-", Hex/binary, ".sig">>;
+        _ ->
+            %% Fallback: just append .sig
+            <<Digest/binary, ".sig">>
+    end.
 
 %%%===================================================================
 %%% Internal functions
@@ -2695,3 +2824,66 @@ get_content_length([{Key, Value} | Rest]) ->
         _ ->
             get_content_length(Rest)
     end.
+
+%% Sanitize HTTP error bodies to prevent credential leakage in logs/errors.
+%% Registry error responses could potentially echo back credentials from requests.
+%% This function extracts only safe, structured error information.
+-spec sanitize_error_body(binary()) -> binary().
+sanitize_error_body(Body) when is_binary(Body) ->
+    %% Limit body size to prevent large payloads in error terms
+    MaxSize = 500,
+    TruncatedBody = case byte_size(Body) > MaxSize of
+        true -> <<(binary:part(Body, 0, MaxSize))/binary, "... (truncated)">>;
+        false -> Body
+    end,
+    %% Try to extract just the error message if it's JSON
+    try
+        case ocibuild_json:decode(TruncatedBody) of
+            #{~"errors" := Errors} when is_list(Errors) ->
+                %% OCI error format: {"errors": [{"code": "...", "message": "..."}]}
+                SafeErrors = [extract_safe_error(E) || E <- Errors],
+                ocibuild_json:encode(#{~"errors" => SafeErrors});
+            #{~"error" := Error} when is_binary(Error) ->
+                %% Simple error format
+                ocibuild_json:encode(#{~"error" => Error});
+            #{~"message" := Msg} when is_binary(Msg) ->
+                ocibuild_json:encode(#{~"message" => Msg});
+            _ ->
+                %% Unknown JSON structure, redact potentially sensitive content
+                redact_sensitive(TruncatedBody)
+        end
+    catch
+        _:_ ->
+            %% Not valid JSON, redact sensitive patterns
+            redact_sensitive(TruncatedBody)
+    end;
+sanitize_error_body(Other) ->
+    iolist_to_binary(io_lib:format("~p", [Other])).
+
+%% Extract safe fields from an OCI error object
+-spec extract_safe_error(map()) -> map().
+extract_safe_error(Error) when is_map(Error) ->
+    SafeFields = [~"code", ~"message", ~"detail"],
+    maps:filter(fun(K, _V) -> lists:member(K, SafeFields) end, Error);
+extract_safe_error(_) ->
+    #{}.
+
+%% Redact strings that look like credentials
+-spec redact_sensitive(binary()) -> binary().
+redact_sensitive(Bin) ->
+    %% Redact base64-encoded credentials (Authorization: Basic/Bearer patterns)
+    %% and anything that looks like a token
+    Patterns = [
+        {<<"Basic [A-Za-z0-9+/=]+">>, <<"Basic [REDACTED]">>},
+        {<<"Bearer [A-Za-z0-9._-]+">>, <<"Bearer [REDACTED]">>},
+        {<<"token\":\"[^\"]+">>, <<"token\":\"[REDACTED]">>},
+        {<<"password\":\"[^\"]+">>, <<"password\":\"[REDACTED]">>},
+        {<<"secret\":\"[^\"]+">>, <<"secret\":\"[REDACTED]">>}
+    ],
+    lists:foldl(
+        fun({Pattern, Replacement}, Acc) ->
+            re:replace(Acc, Pattern, Replacement, [global, {return, binary}])
+        end,
+        Bin,
+        Patterns
+    ).

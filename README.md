@@ -31,7 +31,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 | **Smart dependency layering** | ✅     | Separate layers for ERTS, dependencies, and application code.                                             |
 | **Non-root by default**       | ✅     | Run as non-root (UID 65534) by default; override with `--uid`.                                            |
 | **SBOM generation**           | ✅     | SPDX 2.2 SBOM embedded at `/sbom.spdx.json` and attached via referrers.                                   |
-| **Image signing**             | ⏳     | Sign images with ECDSA keys (cosign-compatible format).                                                   |
+| **Image signing**             | ✅     | Sign images with ECDSA keys (cosign-compatible format).                                                   |
 
 ## Installation
 
@@ -39,7 +39,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 
 ```erlang
 {deps, [
-    {ocibuild, "~> 0.7"}
+    {ocibuild, "~> 0.8"}
 ]}.
 ```
 
@@ -48,7 +48,7 @@ It works from any BEAM language (Erlang, Elixir, Gleam, LFE) and has no dependen
 ```elixir
 def deps do
   [
-    {:ocibuild, "~> 0.7"}
+    {:ocibuild, "~> 0.8"}
   ]
 end
 ```
@@ -62,7 +62,7 @@ The easiest way to use `ocibuild` with Elixir:
 ```elixir
 # mix.exs
 def deps do
-  [{:ocibuild, "~> 0.7"}]
+  [{:ocibuild, "~> 0.8"}]
 end
 
 def project do
@@ -115,7 +115,7 @@ The easiest way to use `ocibuild` with Erlang:
 
 ```erlang
 %% rebar.config
-{project_plugin, [{ocibuild, "~> 0.7"}]}.
+{project_plugin, [{ocibuild, "~> 0.8"}]}.
 
 {ocibuild, [
     {base_image, "debian:stable-slim"},
@@ -201,6 +201,7 @@ Both `mix ocibuild` and `rebar3 ocibuild` share the same CLI options:
 | `--chunk-size`         |       | Chunk size in MB for uploads (default: 5)         |
 | `--sbom`               |       | Export SBOM to file path (SBOM always in image)   |
 | `--no-vcs-annotations` |       | Disable automatic VCS annotations                 |
+| `--sign-key`           |       | Path to cosign private key for image signing      |
 
 **Notes:**
 - Tag defaults to `app:version` in Mix, required in rebar3
@@ -527,6 +528,62 @@ Found bundled ERTS in release directory.
 ```
 
 Native code (NIFs) in the release will trigger a warning since `.so` files may not be portable across platforms.
+
+## Image Signing
+
+Sign images with ECDSA P-256 keys (cosign-compatible format) to prove authenticity and enable verification by Kubernetes admission controllers.
+
+> **Note:** Currently only local key-based signing is supported. Keyless signing via Sigstore/Fulcio may be added in a future release.
+
+### Key Generation
+
+Generate a cosign-compatible key pair:
+
+```bash
+# Using cosign
+cosign generate-key-pair
+
+# Or using openssl
+openssl ecparam -genkey -name prime256v1 -noout -out cosign.key
+openssl ec -in cosign.key -pubout -out cosign.pub
+```
+
+### Usage
+
+```bash
+# Sign with key file
+rebar3 ocibuild --push ghcr.io/myorg --sign-key cosign.key
+mix ocibuild --push ghcr.io/myorg --sign-key cosign.key
+
+# Or via environment variable
+OCIBUILD_SIGN_KEY=cosign.key rebar3 ocibuild --push ghcr.io/myorg
+```
+
+### Configuration
+
+```erlang
+%% rebar.config
+{ocibuild, [
+    {sign_key, "cosign.key"}
+]}.
+```
+
+```elixir
+# mix.exs
+ocibuild: [
+  sign_key: "cosign.key"
+]
+```
+
+### Verification
+
+After pushing, verify the signature with cosign:
+
+```bash
+cosign verify --key cosign.pub ghcr.io/myorg/myapp:latest
+```
+
+The signature is attached to the image using the OCI Referrers API, making it compatible with standard cosign verification workflows and Kubernetes admission controllers like Kyverno and OPA Gatekeeper.
 
 ## Reproducible Builds
 

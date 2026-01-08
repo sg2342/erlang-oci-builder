@@ -4,6 +4,8 @@
 
 %% eqWalizer has limited support for maybe expressions
 -eqwalizer({nowarn_function, push_tarball_impl/8}).
+-eqwalizer({nowarn_function, push_sbom_referrer/6}).
+-eqwalizer({nowarn_function, push_signature_referrer/7}).
 
 -moduledoc """
 Shared release handling for OCI image building.
@@ -65,6 +67,13 @@ Security features:
 -export([
     stop_httpc/0
 ]).
+
+%% Exported for testing
+-ifdef(TEST).
+-export([
+    push_signature_referrer/7
+]).
+-endif.
 
 %% Public API - Multi-platform Validation
 -export([
@@ -193,13 +202,15 @@ run(AdapterModule, AdapterState, Opts) ->
         {ok, Images} ?= build_platform_images(BaseImage, Files, Platforms, BuildOpts),
         %% Output the image(s) - this is where layer downloads happen for save
         SbomPath = maps:get(sbom, Config, undefined),
+        SignKey = maps:get(sign_key, Config, undefined),
         OutputOpts = #{
             tags => Tags,
             output => OutputOpt,
             push => PushRegistry,
             chunk_size => ChunkSize,
             platforms => Platforms,
-            sbom => SbomPath
+            sbom => SbomPath,
+            sign_key => SignKey
         },
         Result = do_output(AdapterModule, AdapterState, Images, OutputOpts),
         ocibuild_progress:stop_manager(),
@@ -606,7 +617,8 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
                 false ->
                     %% Clear progress bars before push to start fresh
                     ocibuild_progress:clear(),
-                    PushOpts = #{chunk_size => ChunkSize},
+                    SignKey = maps:get(sign_key, Opts, undefined),
+                    PushOpts = #{chunk_size => ChunkSize, sign_key => SignKey},
                     do_push(AdapterModule, AdapterState, Images, Tags, PushRegistry, PushOpts)
             end;
         {error, SaveError} ->
@@ -704,6 +716,8 @@ do_push(AdapterModule, AdapterState, Images, Tags, PushDest, Opts) ->
 
             %% Push SBOM as referrer artifact (if available)
             push_sbom_referrer(AdapterModule, Images, Registry, Repo, Auth, PushOpts),
+            %% Push signature as referrer artifact (if sign_key configured)
+            push_signature_referrer(AdapterModule, Images, Registry, Repo, FirstImageTag, Auth, Opts),
             %% Clean up httpc after all pushes complete
             stop_httpc(),
 
@@ -2197,22 +2211,13 @@ erts_error_message() ->
 %% @private Warn about native code that may not be portable
 -spec warn_about_nifs([#{app := binary(), file := binary(), extension := binary()}]) -> ok.
 warn_about_nifs(NifFiles) ->
-    io:format(
-        standard_error,
-        "~nWarning: Native code detected that may not be portable across platforms:~n",
-        []
-    ),
-    lists:foreach(
-        fun(#{app := App, file := File}) ->
-            io:format(standard_error, "  - ~s: ~s~n", [App, File])
-        end,
-        NifFiles
-    ),
-    io:format(standard_error, "~nNIFs compiled for one architecture won't work on others.~n", []),
-    io:format(
-        standard_error,
-        "Consider using cross-compilation or Rust-based NIFs with multi-target support.~n~n",
-        []
+    NifList = [io_lib:format("  - ~s: ~s", [App, File]) || #{app := App, file := File} <- NifFiles],
+    NifListStr = lists:join("\n", NifList),
+    logger:warning(
+        "Native code detected that may not be portable across platforms:~n~s~n~n"
+        "NIFs compiled for one architecture won't work on others.~n"
+        "Consider using cross-compilation or Rust-based NIFs with multi-target support.",
+        [NifListStr]
     ),
     ok.
 
@@ -2239,40 +2244,117 @@ push_sbom_referrer(_AdapterModule, Images, _Registry, _Repo, _Auth, _Opts) when 
     %% (would need to attach SBOM to each platform manifest)
     ok;
 push_sbom_referrer(AdapterModule, Image, Registry, Repo, Auth, Opts) when is_map(Image) ->
-    case maps:get(sbom, Image, undefined) of
-        undefined ->
+    SbomJson = maps:get(sbom, Image, undefined),
+    maybe
+        %% Only proceed if SBOM exists
+        true ?= is_binary(SbomJson),
+        %% Calculate manifest digest and size from image
+        {ok, ManifestDigest, ManifestSize} ?= calculate_manifest_info(Image),
+        %% Push SBOM as referrer
+        PushOpts = maps:with([chunk_size], Opts),
+        PushResult = ocibuild_registry:push_referrer(
+            SbomJson,
+            ocibuild_sbom:media_type(),
+            Registry,
+            Repo,
+            ManifestDigest,
+            ManifestSize,
+            Auth,
+            PushOpts
+        ),
+        case PushResult of
+            ok ->
+                AdapterModule:info("SBOM attached as artifact", []);
+            {error, {referrer_not_supported, _}} ->
+                %% Registry doesn't support referrers - silent skip
+                ok;
+            {error, Reason} ->
+                AdapterModule:info("Warning: SBOM attachment failed: ~p", [Reason])
+        end
+    else
+        false ->
+            %% No SBOM in image - skip
             ok;
-        SbomJson when is_binary(SbomJson) ->
-            %% Calculate manifest digest and size from image
-            case calculate_manifest_info(Image) of
-                {ok, ManifestDigest, ManifestSize} ->
-                    PushOpts = maps:with([chunk_size], Opts),
-                    case
-                        ocibuild_registry:push_referrer(
-                            SbomJson,
-                            ocibuild_sbom:media_type(),
-                            Registry,
-                            Repo,
-                            ManifestDigest,
-                            ManifestSize,
-                            Auth,
-                            PushOpts
-                        )
-                    of
-                        ok ->
-                            AdapterModule:info("SBOM attached as artifact", []);
-                        {error, {referrer_not_supported, _}} ->
-                            %% Registry doesn't support referrers - silent skip
-                            ok;
-                        {error, Reason} ->
-                            AdapterModule:info("Warning: SBOM attachment failed: ~p", [Reason])
-                    end;
-                {error, _Reason} ->
-                    %% Could not calculate manifest - skip referrer push
-                    ok
-            end
-    end,
-    ok.
+        {error, _Reason} ->
+            %% Could not calculate manifest - skip referrer push
+            ok
+    end.
+
+%%%===================================================================
+%%% Image Signing
+%%%===================================================================
+
+%% @private Push cosign-compatible signature as OCI referrer artifact
+%% For single-platform images, signs and pushes signature as referrer to the image manifest.
+%% For multi-platform images, signature attachment is not yet supported.
+-spec push_signature_referrer(
+    module(),
+    ocibuild:image() | [ocibuild:image()],
+    binary(),
+    binary(),
+    binary(),
+    map(),
+    map()
+) -> ok.
+push_signature_referrer(AdapterModule, [Image], Registry, Repo, Tag, Auth, Opts) when is_map(Image) ->
+    %% Single image in a list - unwrap and process
+    push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts);
+push_signature_referrer(_AdapterModule, Images, _Registry, _Repo, _Tag, _Auth, _Opts) when is_list(Images) ->
+    %% Multi-platform images - signature attachment not yet supported
+    ok;
+push_signature_referrer(AdapterModule, Image, Registry, Repo, Tag, Auth, Opts) when is_map(Image) ->
+    SignKeyPath = maps:get(sign_key, Opts, undefined),
+    maybe
+        %% Only proceed if sign_key is a binary path
+        true ?= is_binary(SignKeyPath),
+        %% Load the signing key
+        {ok, PrivateKey} ?= ocibuild_sign:load_key(binary_to_list(SignKeyPath)),
+        %% Calculate manifest digest and size
+        {ok, ManifestDigest, ManifestSize} ?= calculate_manifest_info(Image),
+        %% Build docker reference for payload
+        DockerRef = <<Registry/binary, "/", Repo/binary, ":", Tag/binary>>,
+        %% Sign the manifest
+        {ok, PayloadJson, Signature} ?= ocibuild_sign:sign(ManifestDigest, DockerRef, PrivateKey),
+        %% Push signature as referrer
+        PushOpts = maps:with([chunk_size], Opts),
+        PushResult = ocibuild_registry:push_signature(
+            PayloadJson,
+            Signature,
+            Registry,
+            Repo,
+            ManifestDigest,
+            ManifestSize,
+            Auth,
+            PushOpts
+        ),
+        case PushResult of
+            ok ->
+                SignatureTag = ocibuild_registry:digest_to_signature_tag(ManifestDigest),
+                AdapterModule:info("Image signed with ~s", [SignatureTag]);
+            {error, PushError} ->
+                AdapterModule:info("Warning: Signing failed: ~p", [PushError])
+        end
+    else
+        false ->
+            %% No sign key configured (SignKeyPath is undefined/nil/not binary) - skip
+            ok;
+        {error, {key_read_failed, KeyPath, _} = KeyError} ->
+            %% File read error - path is in the error tuple
+            AdapterModule:info("Warning: Failed to load signing key ~s: ~p", [KeyPath, KeyError]);
+        {error, {invalid_pem, _} = KeyError} ->
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
+        {error, {pem_decode_failed, _} = KeyError} ->
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
+        {error, {key_decode_failed, _} = KeyError} ->
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
+        {error, {unsupported_curve, _, _} = KeyError} ->
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
+        {error, {unsupported_curve_format, _} = KeyError} ->
+            AdapterModule:info("Warning: Invalid signing key ~s: ~p", [SignKeyPath, KeyError]);
+        {error, Reason} ->
+            %% Could not calculate manifest, signing failed, or other error
+            AdapterModule:info("Warning: Signing failed: ~p", [Reason])
+    end.
 
 %% @private Calculate manifest digest and size from image
 %% Reuses manifest building logic from ocibuild_layout
