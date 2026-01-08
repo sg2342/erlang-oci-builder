@@ -1,15 +1,26 @@
 # Changelog
 
-## 0.7.0 - 2026-01-07
+## 0.7.0 - 2026-01-08
 
 ### Features
 
-- **Push existing OCI tarballs**: 
-  - Push pre-built OCI tarballs to registries without rebuilding.
+- **Push existing OCI tarballs**:
+  - Push pre-built OCI tarballs to registries without rebuilding
   - Works with both single-platform and multi-platform images
   - Tag extracted from `org.opencontainers.image.ref.name` annotation by default
   - Use `--tag` to override; manifest annotation is updated to match
   - Hybrid loading: small images (<100MB) loaded to memory, larger images extracted to temp directory
+
+### Security
+
+- **Tarball security validation**: Comprehensive validation of OCI tarballs to prevent malicious input:
+  - Path traversal protection: Reject entries with `../` components or absolute paths
+  - Symlink rejection: Prevent symlink escape attacks that could read arbitrary files
+  - Hardlink rejection: Prevent hardlink-based attacks
+  - Unknown entry type rejection: Only allow regular files and directories (reject devices, FIFOs, sockets)
+  - Null byte detection: Defense-in-depth against null byte injection
+  - Validation applies to both memory mode and disk mode loading
+  - OCI index schema validation: Reject tarballs with invalid `schemaVersion` or empty manifests
 
 ### New Functions
 
