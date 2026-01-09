@@ -601,8 +601,6 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
 
     case SaveResult of
         ok ->
-            AdapterModule:info("Image saved successfully", []),
-
             %% Export SBOM to file if path specified
             SbomPath = maps:get(sbom, Opts, undefined),
             export_sbom_file(AdapterModule, Images, SbomPath),
@@ -612,7 +610,8 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
                 true ->
                     %% No push - clean up httpc started during base image pull
                     stop_httpc(),
-                    AdapterModule:console("~nTo load the image:~n  podman load < ~s~n", [OutputPath]),
+                    %% Print tags and digest for saved image
+                    print_save_summary(AdapterModule, Images, Tags, OutputPath),
                     {ok, AdapterState};
                 false ->
                     %% Clear progress bars before push to start fresh
@@ -625,6 +624,32 @@ do_output(AdapterModule, AdapterState, Images, Opts) ->
             stop_httpc(),
             {error, {save_failed, SaveError}}
     end.
+
+%% @private Print summary after saving image (tags and digest)
+-spec print_save_summary(module(), ocibuild:image() | [ocibuild:image()], [binary()], string()) -> ok.
+print_save_summary(AdapterModule, Images, Tags, OutputPath) ->
+    %% Get first image for digest calculation
+    Image = case Images of
+        [First | _] -> First;
+        Single when is_map(Single) -> Single
+    end,
+    %% Calculate manifest digest
+    Digest = case calculate_manifest_info(Image) of
+        {ok, D, _Size} -> D;
+        {error, _} -> ~"unknown"
+    end,
+    %% Print all tags (console adds newline, so no ~n needed)
+    lists:foreach(
+        fun(Tag) ->
+            AdapterModule:console("Tagged: ~s", [Tag])
+        end,
+        Tags
+    ),
+    %% Print digest
+    AdapterModule:console("Digest: ~s", [Digest]),
+    %% Print load instructions
+    AdapterModule:console("~nTo load the image:~n  podman load < ~s", [OutputPath]),
+    ok.
 
 %% @private Format platform list for display
 -spec format_platform_list([ocibuild:platform()]) -> string().
@@ -694,18 +719,17 @@ do_push(AdapterModule, AdapterState, Images, Tags, PushDest, Opts) ->
     RepoTag = <<Repo/binary, ":", FirstImageTag/binary>>,
 
     %% Push single image or multi-platform index with first tag
+    FullRef = <<Registry/binary, "/", Repo/binary, ":", FirstImageTag/binary>>,
     PushResult =
         case Images of
             ImageList when is_list(ImageList), length(ImageList) > 1 ->
-                AdapterModule:info("Pushing multi-platform image to ~s/~s:~s", [
-                    Registry, Repo, FirstImageTag
-                ]),
+                AdapterModule:info("Pushing: ~s (multi-platform)", [FullRef]),
                 ocibuild:push_multi(ImageList, Registry, RepoTag, Auth, PushOpts);
             [SingleImage] ->
-                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, FirstImageTag]),
+                AdapterModule:info("Pushing: ~s", [FullRef]),
                 push_image(SingleImage, Registry, RepoTag, Auth, PushOpts);
             SingleImage ->
-                AdapterModule:info("Pushing to ~s/~s:~s", [Registry, Repo, FirstImageTag]),
+                AdapterModule:info("Pushing: ~s", [FullRef]),
                 push_image(SingleImage, Registry, RepoTag, Auth, PushOpts)
         end,
 
@@ -721,19 +745,21 @@ do_push(AdapterModule, AdapterState, Images, Tags, PushDest, Opts) ->
             %% Clean up httpc after all pushes complete
             stop_httpc(),
 
-            %% Print digests for all tags (same digest for all)
+            %% Print all tags that were pushed (console adds newline)
             FullImageRef = <<Registry/binary, "/", Repo/binary, ":", FirstImageTag/binary>>,
-            AdapterModule:console("Pushed: ~s@~s~n", [FullImageRef, Digest]),
+            AdapterModule:console("Tagged: ~s", [FullImageRef]),
             lists:foreach(
                 fun({Tag, ok}) ->
                     {_, TagPart} = parse_tag(Tag),
                     Ref = <<Registry/binary, "/", Repo/binary, ":", TagPart/binary>>,
-                    AdapterModule:console("Pushed: ~s@~s~n", [Ref, Digest]);
+                    AdapterModule:console("Tagged: ~s", [Ref]);
                    ({Tag, {error, Reason}}) ->
                     AdapterModule:error("Failed to tag ~s: ~p", [Tag, Reason])
                 end,
                 TagResults
             ),
+            %% Print final digest for CI pipelines
+            AdapterModule:console("Digest: ~s", [Digest]),
             {ok, AdapterState};
         {error, PushError} ->
             stop_httpc(),
@@ -1244,7 +1270,11 @@ push_tarball_impl(AdapterModule, AdapterState, Registry, TagsOverride,
             _ -> <<Namespace/binary, "/", ImageName/binary>>
         end,
 
-        AdapterModule:info("Pushing to ~s/~s:~s", [RegistryHost, Repo, FirstImageTag]),
+        FullRef = <<RegistryHost/binary, "/", Repo/binary, ":", FirstImageTag/binary>>,
+        case IsMulti of
+            true -> AdapterModule:info("Pushing: ~s (multi-platform)", [FullRef]);
+            false -> AdapterModule:info("Pushing: ~s", [FullRef])
+        end,
 
         %% Get auth and progress
         Auth = get_push_auth(),
@@ -1284,19 +1314,21 @@ push_tarball_impl(AdapterModule, AdapterState, Registry, TagsOverride,
 
         stop_httpc(),
 
-        %% Print digests for all tags
+        %% Print all tags that were pushed (console adds newline)
         FullRef = <<RegistryHost/binary, "/", Repo/binary, ":", FirstImageTag/binary>>,
-        AdapterModule:console("Pushed: ~s@~s~n", [FullRef, Digest]),
+        AdapterModule:console("Tagged: ~s", [FullRef]),
         lists:foreach(
             fun({Tag, ok}) ->
                 {_, TagPart} = parse_tag(Tag),
                 Ref = <<RegistryHost/binary, "/", Repo/binary, ":", TagPart/binary>>,
-                AdapterModule:console("Pushed: ~s@~s~n", [Ref, Digest]);
+                AdapterModule:console("Tagged: ~s", [Ref]);
                ({Tag, {error, Reason}}) ->
                 AdapterModule:error("Failed to tag ~s: ~p", [Tag, Reason])
             end,
             TagResults
         ),
+        %% Print final digest for CI pipelines
+        AdapterModule:console("Digest: ~s", [Digest]),
         {ok, AdapterState}
     else
         {error, _} = Err -> Err
