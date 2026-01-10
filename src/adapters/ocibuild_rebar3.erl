@@ -289,7 +289,7 @@ get_config(State) ->
         env => proplists:get_value(env, Config, #{}),
         expose => proplists:get_value(expose, Config, []),
         labels => proplists:get_value(labels, Config, #{}),
-        cmd => ~"foreground",
+        cmd => proplists:get_value(cmd, Config, ~"foreground"),
         description => get_description(Args, Config),
         tags => get_tags(Args, Config),
         output => get_output(Args),
