@@ -223,7 +223,7 @@ mix ocibuild -t myapp:1.0.0 -t myapp:latest --push ghcr.io/myorg
 rebar3 ocibuild --push ghcr.io/myorg -t myapp:2.0.0 -t myapp:latest myimage.tar.gz
 ```
 
-This is efficient: the first tag does a full upload, additional tags just reference the same manifest (no blob re-upload). All tags report the same digest.
+The first tag does a full upload, additional tags just reference the same manifest (no blob re-upload). All tags report the same digest.
 
 ### Push Existing Tarball
 
