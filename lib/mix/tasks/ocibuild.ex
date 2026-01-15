@@ -118,9 +118,7 @@ defmodule Mix.Tasks.Ocibuild do
 
   # Detect tarball path from positional arguments
   defp detect_tarball_arg([path | _]) when is_binary(path) do
-    ext = Path.extname(path)
-
-    if ext in [".gz", ".tar", ".tgz"] do
+    if :ocibuild_release.is_tarball_path(path) do
       path
     else
       nil

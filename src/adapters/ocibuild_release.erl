@@ -100,7 +100,8 @@ Security features:
     to_container_path/1,
     get_file_mode/1,
     make_relative_path/2,
-    is_nil_or_undefined/1
+    is_nil_or_undefined/1,
+    is_tarball_path/1
 ]).
 
 %% Public API - Key-Value Utilities (used by adapters for annotations and labels)
@@ -132,6 +133,16 @@ Security features:
 -endif.
 
 -define(DEFAULT_WORKDIR, ~"/app").
+
+%% Supported tarball extensions mapped to their compression type.
+%% Used by classify_extension/1 and is_tarball_path/1.
+-define(TARBALL_EXTENSIONS, [
+    {".tar.gz", gzip},
+    {".tgz", gzip},
+    {".tar.zst", zstd},
+    {".tar.zstd", zstd},
+    {".tar", incomplete}  % Needs compression suffix
+]).
 
 %% Protected annotations that cannot be overridden by user-provided annotations.
 %% These are computed from actual values (VCS, base image) and should not be
@@ -757,20 +768,26 @@ compression_extension(Compression) ->
     {valid, gzip | zstd} | needs_completion | {invalid, string()}.
 classify_extension(Path) ->
     LowerPath = string:lowercase(Path),
-    case {has_suffix(LowerPath, ".tar.gz"), has_suffix(LowerPath, ".tgz"),
-          has_suffix(LowerPath, ".tar.zst"), has_suffix(LowerPath, ".tar.zstd"),
-          has_suffix(LowerPath, ".tar")} of
-        {true, _, _, _, _} -> {valid, gzip};
-        {_, true, _, _, _} -> {valid, gzip};
-        {_, _, true, _, _} -> {valid, zstd};
-        {_, _, _, true, _} -> {valid, zstd};
-        {_, _, _, _, true} -> needs_completion;
-        _ ->
+    case match_tarball_extension(LowerPath, ?TARBALL_EXTENSIONS) of
+        {ok, gzip} -> {valid, gzip};
+        {ok, zstd} -> {valid, zstd};
+        {ok, incomplete} -> needs_completion;
+        nomatch ->
             %% Check if there's any extension at all
             case filename:extension(Path) of
                 "" -> needs_completion;
                 Ext -> {invalid, Ext}
             end
+    end.
+
+%% @private Match path against known tarball extensions
+-spec match_tarball_extension(string(), [{string(), atom()}]) -> {ok, atom()} | nomatch.
+match_tarball_extension(_Path, []) ->
+    nomatch;
+match_tarball_extension(Path, [{Ext, Type} | Rest]) ->
+    case has_suffix(Path, Ext) of
+        true -> {ok, Type};
+        false -> match_tarball_extension(Path, Rest)
     end.
 
 %% @private Check if string has suffix
@@ -780,6 +797,22 @@ has_suffix(Str, Suffix) ->
     SuffixLen = length(Suffix),
     StrLen >= SuffixLen andalso
         lists:suffix(Suffix, Str).
+
+-doc """
+Check if a path looks like a tarball based on its extension.
+
+Returns `true` for paths ending in `.tar.gz`, `.tgz`, `.tar.zst`, `.tar.zstd`, or `.tar`.
+Used by adapters to detect push-existing-tarball mode.
+""".
+-spec is_tarball_path(string() | binary()) -> boolean().
+is_tarball_path(Path) when is_binary(Path) ->
+    is_tarball_path(binary_to_list(Path));
+is_tarball_path(Path) when is_list(Path) ->
+    case classify_extension(Path) of
+        {valid, _} -> true;
+        needs_completion -> true;
+        {invalid, _} -> false
+    end.
 
 %% @private Push image(s) to registry with multiple tags
 %% Handles both single image and list of images (multi-platform)

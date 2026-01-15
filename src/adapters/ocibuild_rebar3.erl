@@ -185,8 +185,7 @@ require_tags([_ | _]) -> ok.
 %% Detect tarball path from positional arguments
 -spec detect_tarball_arg([string()]) -> {ok, string()} | undefined.
 detect_tarball_arg([Path | _]) when is_list(Path) ->
-    Ext = filename:extension(Path),
-    case lists:member(Ext, [".gz", ".tar", ".tgz"]) of
+    case ocibuild_release:is_tarball_path(Path) of
         true -> {ok, Path};
         false -> undefined
     end;
