@@ -95,6 +95,7 @@ src/
     ├── ocibuild_digest.erl       → SHA256 utilities
     ├── ocibuild_json.erl         → JSON encode/decode
     ├── ocibuild_time.erl         → Timestamp utilities
+    ├── ocibuild_validate.erl     → Shared validation (null bytes, path traversal)
     └── ocibuild_progress.erl     → Progress reporting
 
 lib/

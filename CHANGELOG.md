@@ -1,12 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## 0.10.0 - 2026-01-15
 
 ### Breaking Changes
 
 - **Removed `--desc` CLI option and `description` config option**: Use `--annotation "org.opencontainers.image.description=Your description"` or the `annotations` config map instead. This consolidates description handling into the more flexible annotations system.
 
 ### Features
+
+- **Custom image labels** ([#39](https://github.com/intility/erlang-oci-builder/issues/39)):
+  - New `--label KEY=VALUE` CLI flag (repeatable) for adding custom OCI image config labels
+  - New `-l` short alias for `--label`
+  - CLI labels override config labels from rebar.config or mix.exs
+  - Shared `parse_cli_kv_list/2` helper eliminates code duplication between annotation and label parsing
 
 - **Custom manifest annotations** ([#37](https://github.com/intility/erlang-oci-builder/issues/37)):
   - New `--annotation KEY=VALUE` CLI flag (repeatable) for adding custom OCI manifest annotations
