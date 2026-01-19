@@ -1336,10 +1336,7 @@ normalize_arch(Arch) ->
 %% Direct token takes priority for all registries
 get_auth_token(_Registry, _Repo, #{token := Token}, _OpScope) ->
     {ok, Token};
-%% Docker Hub with username/password requires token exchange via known auth server
-get_auth_token(~"docker.io", Repo, #{username := _, password := _} = Auth, OpScope) ->
-    docker_hub_auth(Repo, Auth, OpScope);
-%% All other registries: discover auth via WWW-Authenticate challenge
+%% All registries with username/password: discover auth via WWW-Authenticate challenge
 get_auth_token(Registry, Repo, #{username := _, password := _} = Auth, OpScope) ->
     discover_auth(Registry, Repo, Auth, OpScope);
 %% No auth provided - try anonymous access
@@ -1357,40 +1354,6 @@ normalize_docker_hub_repo(Repo) ->
         _ ->
             %% User/org image - use as-is
             Repo
-    end.
-
-%% Docker Hub specific authentication
-%% OpScope determines whether to request pull-only or pull+push access
--spec docker_hub_auth(binary(), map(), operation_scope()) -> {ok, binary()} | {error, term()}.
-docker_hub_auth(Repo, Auth, OpScope) ->
-    %% Docker Hub requires getting a token from auth.docker.io
-    %% Normalize repo name (add library/ prefix for official images)
-    NormalizedRepo = normalize_docker_hub_repo(Repo),
-    Scope = make_scope_string(NormalizedRepo, OpScope),
-    Url =
-        "https://auth.docker.io/token?service=registry.docker.io&scope=" ++
-            encode_scope(Scope),
-
-    Headers =
-        case Auth of
-            #{username := User, password := Pass} ->
-                Encoded = base64:encode(<<User/binary, ":", Pass/binary>>),
-                [{"Authorization", "Basic " ++ binary_to_list(Encoded)}];
-            _ ->
-                []
-        end,
-
-    case ?MODULE:http_get(Url, Headers) of
-        {ok, Body} ->
-            Response = ocibuild_json:decode(Body),
-            case maps:find(~"token", Response) of
-                {ok, Token} ->
-                    {ok, Token};
-                error ->
-                    {error, no_token_in_response}
-            end;
-        {error, _} = Err ->
-            Err
     end.
 
 %% Discover authentication via WWW-Authenticate challenge (standard OCI flow)
