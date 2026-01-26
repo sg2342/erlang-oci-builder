@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.10.3](https://github.com/sg2342/erlang-oci-builder/compare/v0.10.2...v0.10.3) (2026-01-26)
+
+
+### Features
+
+* Add --label CLI flag for runtime image labels ([#40](https://github.com/sg2342/erlang-oci-builder/issues/40)) ([bdc08df](https://github.com/sg2342/erlang-oci-builder/commit/bdc08df4f2a45959376f4d64f42009fdbdb75660))
+* add custom image labels via CLI ([3afcf99](https://github.com/sg2342/erlang-oci-builder/commit/3afcf9942e1ce589ea6778dabcbfa9cd097f5da7)), closes [#39](https://github.com/sg2342/erlang-oci-builder/issues/39)
+* Add image description annotation support ([525018c](https://github.com/sg2342/erlang-oci-builder/commit/525018c481302c3c0a60a58ee7d61f8434231cbc))
+* Add reproducible builds support via SOURCE_DATE_EPOCH ([#12](https://github.com/sg2342/erlang-oci-builder/issues/12)) ([d56da0c](https://github.com/sg2342/erlang-oci-builder/commit/d56da0c6675847c0855768806c938cd1d1c14966))
+* Add SSL verification with system CA certificates for HTTPS requests ([91e1b11](https://github.com/sg2342/erlang-oci-builder/commit/91e1b113595b9a729fd48fbdcb5beecba155d19a))
+* **cache:** Add layer caching system for OCI image builds ([af8f3e0](https://github.com/sg2342/erlang-oci-builder/commit/af8f3e0701c0334e02861992f04cfb3c8abb1e4a))
+* **ci:** streamline Hex.pm authentication in publish workflow ([fe957fa](https://github.com/sg2342/erlang-oci-builder/commit/fe957faf7feb883928b3944be95458a2e1dbadee))
+* **ci:** Use erlangpack/github-action for Hex.pm publishing ([deef002](https://github.com/sg2342/erlang-oci-builder/commit/deef002fc1775b30b666ace810289adefbe9d8a0))
+* **layout:** Add tag support to OCI layout and include base layers ([88fba65](https://github.com/sg2342/erlang-oci-builder/commit/88fba650834341742e4138c52fbfd6f3b3cb7ed9))
+* **mix:** Add Elixir Mix task and release step integration ([34d8b3d](https://github.com/sg2342/erlang-oci-builder/commit/34d8b3d8719b41aa438da72451113a3d65135273))
+* **otp:** Drop support for OTP 25 and older versions ([0e9550a](https://github.com/sg2342/erlang-oci-builder/commit/0e9550a6caadc27b8c792efa462acfbb31aa8a65))
+* **push:** Add ability to push existing OCI tarballs without rebuilding ([#29](https://github.com/sg2342/erlang-oci-builder/issues/29)) ([a3e426c](https://github.com/sg2342/erlang-oci-builder/commit/a3e426c28329b6f6970c18907704b05c9ec199cb))
+* **rebar3:** Add rebar3 provider for building OCI images from releases ([b69afc5](https://github.com/sg2342/erlang-oci-builder/commit/b69afc5562f34cab99f6189cd08aea3dd3c00a3b))
+* **registry:** Add multi-platform image support and fix HTTP redirects ([637beb3](https://github.com/sg2342/erlang-oci-builder/commit/637beb317ea278142a90d3c4b6042a977937bb42))
+* **registry:** Add operation scope to authentication token requests ([#42](https://github.com/sg2342/erlang-oci-builder/issues/42)) ([bcf69fd](https://github.com/sg2342/erlang-oci-builder/commit/bcf69fd4bb30205f9462a9a94989c62ca6924f94))
+* **registry:** Add retry logic and progress reporting for layer downloads ([628c89f](https://github.com/sg2342/erlang-oci-builder/commit/628c89f1fc3bcfb985b32fd8d39872c8acb8eede))
+* **registry:** Add streaming downloads with progress reporting ([baead74](https://github.com/sg2342/erlang-oci-builder/commit/baead7415e75a9911cf7c62ac7f6281c42fde993))
+* **registry:** Implement chunked uploads for large layers ([#3](https://github.com/sg2342/erlang-oci-builder/issues/3)) ([5806c51](https://github.com/sg2342/erlang-oci-builder/commit/5806c51a67a598b993ac1e97b298e304ff2588b2))
+* Return manifest digest from push operations ([#24](https://github.com/sg2342/erlang-oci-builder/issues/24)) ([ee23db1](https://github.com/sg2342/erlang-oci-builder/commit/ee23db1fe5e7c2ecc6896140dacf975e1b4eb106))
+* **sbom:** Add SPDX 2.2 SBOM generation and OCI referrer support ([#18](https://github.com/sg2342/erlang-oci-builder/issues/18)) ([bbbce79](https://github.com/sg2342/erlang-oci-builder/commit/bbbce79609799cbae64b4ac832326c84b190af95))
+* **sign:** Add cosign-compatible image signing support ([#26](https://github.com/sg2342/erlang-oci-builder/issues/26)) ([c3eece0](https://github.com/sg2342/erlang-oci-builder/commit/c3eece0d1c3b6d19e32870bcc358ecde09129e3f))
+
+
+### Bug Fixes
+
+* **ci:** Add explicit hexpm repository flag to hex publish ([6947100](https://github.com/sg2342/erlang-oci-builder/commit/69471001954f85b6ac987b7b28ae0673cc97f794))
+* **ci:** Add Hex.pm organization authentication step ([e23f338](https://github.com/sg2342/erlang-oci-builder/commit/e23f33834b5dcaff591000802914c1193ce47df7))
+* **docs:** Correct CI badge workflow filename extension ([c43dd77](https://github.com/sg2342/erlang-oci-builder/commit/c43dd77bb97de35fa91cf82c25a2e6a697d501f2))
+* **docs:** Update badge URLs and workflow file extension ([46d9457](https://github.com/sg2342/erlang-oci-builder/commit/46d9457ad9d49fb0d6023e73e0ee565f7d14e4e8))
+* **entrypoint:** Clear inherited Cmd from base image ([30ae532](https://github.com/sg2342/erlang-oci-builder/commit/30ae5321e8dcc8538864ebbe7e5e332e5e37cece))
+* Revert version from 0.10.2 to 0.10.1 ([3685339](https://github.com/sg2342/erlang-oci-builder/commit/368533910ae6a7fbba2f8f8fa1d800f7b4cd304e))
+
+
+### Performance Improvements
+
+* optimize list operations and improve error handling ([0b324d8](https://github.com/sg2342/erlang-oci-builder/commit/0b324d8d36ed92dc4059a327df13cbd7c5c194a9))
+
 ## [0.10.2](https://github.com/intility/erlang-oci-builder/compare/v0.10.1...v0.10.2) (2026-01-21)
 
 
